@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="ProtoStream.Tests/ProtoStream.Tests.csproj" />
+  <Project Path="ProtoStream/ProtoStream.csproj" />
+</Solution>
