@@ -1,0 +1,69 @@
+name: Release
+
+# Push a tag named <package>-v<version> to publish one package, for example:
+#   git tag Http-v0.1.0 && git push origin Http-v0.1.0
+# The version in the tag must equal the <Version> of the project.
+
+on:
+  push:
+    tags:
+      - 'Core-v*'
+      - 'Http-v*'
+      - 'WebSockets-v*'
+      - 'Testing-v*'
+
+permissions:
+  contents: read
+  id-token: write # NuGet trusted publishing
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Resolve package
+        id: package
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          prefix="${tag%%-v*}"
+          version="${tag#*-v}"
+          case "$prefix" in
+            Core)       project="Axiom.ProtoStream/Axiom.ProtoStream.csproj" ;;
+            Http)       project="Protocols/Axiom.ProtoStream.Http/Axiom.ProtoStream.Http.csproj" ;;
+            WebSockets) project="Protocols/Axiom.ProtoStream.WebSockets/Axiom.ProtoStream.WebSockets.csproj" ;;
+            Testing)    project="Axiom.ProtoStream.Testing/Axiom.ProtoStream.Testing.csproj" ;;
+            *) echo "Unknown package prefix '$prefix'"; exit 1 ;;
+          esac
+          declared=$(grep -oP '(?<=<Version>)[^<]+' "$project")
+          if [ "$declared" != "$version" ]; then
+            echo "Tag version $version does not match <Version>$declared</Version> in $project"
+            exit 1
+          fi
+          echo "project=$project" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: dotnet test Axiom.ProtoStream.slnx --configuration Release
+
+      - name: Pack
+        run: dotnet pack "${{ steps.package.outputs.project }}" --configuration Release -p:ContinuousIntegrationBuild=true --output artifacts
+
+      - name: NuGet login
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ vars.NUGET_USER || 'DeadMoon0' }}
+
+      - name: Push
+        run: dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate

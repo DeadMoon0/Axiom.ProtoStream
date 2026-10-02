@@ -1,36 +1,36 @@
-# ProtoStream — Architecture (arc42)
+# Axiom.ProtoStream — Architecture (arc42)
 
 ## 1. Introduction and goals
 
 ProtoStream lets a protocol author **describe a protocol once** — framing, messages, state machine,
-limits, lifecycle — and run that description over any `Stream` or `IDuplexPipe`.
+limits, lifecycle — and run that description over any `Stream` or `IDuplexPipe`. It is part of the
+[Axiom](https://github.com/DeadMoon0/Axiom) family; packages and namespaces are `Axiom.ProtoStream*`.
 
 | Goal | Meaning |
 |---|---|
-| The framework manages, the user decides | The user sees only the messages the protocol hands to them. Auto-replies, state tracking, body draining, timeouts and limits are framework work. |
-| Validate early | Everything that can be checked from the description is checked at `Build()`; combinations only known per connection at `OpenAsync`; the rest at the wire. |
-| Fast and allocation-free | Zero allocations per message on the read path in steady state; overhead over a raw `PipeReader` loop in the low single-digit percent. |
-| Safe by default | The peer is hostile. Every length is bounded, every wait has a deadline, ambiguity is rejected. |
-| A good public package | Binary-compatible growth, trimming/AOT-safe, documented, one entry point per package. |
+| The framework manages, the user decides | The user sees only the messages the protocol hands over. Automatic replies, state tracking, body draining, timeouts, limits and framing fields are framework work. |
+| Validate early | What the description can prove is checked at `Build()`, everything else at the wire. |
+| Fast and allocation-free | No per-message allocation on the read path in steady state; measured by Release-only tests and benchmarks. |
+| Safe by default | The peer is hostile: every length is bounded, every wait has a deadline, ambiguity is refused. |
+| Spec-compliant | Every MUST of the implemented RFCs has a test ([COMPLIANCE.md](COMPLIANCE.md)); WebSockets pass the Autobahn suite. |
+| A good public package family | Binary-compatible growth, trimming/AOT-safe, documented, one entry point per package. |
 
 ## 2. Constraints
 
-- .NET 8 and .NET 10, `System.IO.Pipelines` as the I/O model.
-- No reflection on hot paths, no runtime code generation: trimmable and Native-AOT compatible.
-- The framework never schedules work on its own (no `Task.Run`, no background pumps). The task that
-  awaits a read drives the session. The single exception is the opt-in heartbeat timer, which only
-  sends a framework-defined message under the connection's write lock.
-- Public API: no optional parameters, no positional records without `[ClosedShape]`
-  (enforced by convention tests).
+- .NET 8 and .NET 10, `System.IO.Pipelines` as the I/O model, no other dependency.
+- No reflection on hot paths, no runtime code generation.
+- The framework never schedules work on its own: the task that awaits a read drives the session. The only
+  exception is the opt-in heartbeat timer, which sends a framework message under the write lock.
+- Public API: no optional parameters, no positional records without `[ClosedShape]` (convention tests in every
+  test project). No bare numbers: protocol constants are named (`HttpStatus`, `WsCloseCode`, ...).
 
 ## 3. Context and scope
 
-ProtoStream ends at "typed message in, typed message out, state and lifecycle handled".
-Routing, dependency injection, authentication, request contexts and logging scopes belong to the host
-(for example a web server) that wraps each delivered message in its own context.
+ProtoStream ends at "typed message in, typed message out, state and lifecycle handled". Routing, dependency
+injection, authentication and request contexts belong to the host.
 
-Out of scope: datagram transports, TLS itself (use `SslStream` through a transport switch),
-multiplexed protocols (HTTP/2, QUIC) in v1.
+Out of scope: datagram transports, TLS itself (use `SslStream`, also as a transport switch), multiplexed
+protocols (HTTP/2, HTTP/3), WebSocket extensions.
 
 ## 4. Solution strategy
 
@@ -38,79 +38,75 @@ Honest layers at the bottom, one dishonest object at the top:
 
 | Layer | Honest? | Types |
 |---|---|---|
-| Framing | yes | `IFramer`, `LengthPrefix`, built-in framers |
-| Codec | yes | `IMessageReader<TIn>`, `IMessageWriter<TOut>`, `ICodec<TIn,TOut>`, `Wire`, `MessageSet` |
-| State machine | yes | compiled `StateTable` from `Protocol.Describe(...)...Build()` |
-| Policies | yes | limits, timeouts, violation policy — plain data |
-| Session | no | `Connection`, `Session<TIn,TOut>` — pumps the pipe through the stack |
+| Framing | yes | `IFramer`, `LengthPrefix`, `Framers` |
+| Codecs | yes | `IMessageReader<T>`, `IMessageWriter<T>`, `ICodec<TIn,TOut>`, `IFrameCodec`, `Wire*`, message sets |
+| State machine | yes | compiled `ProtocolDefinition<TIn,TOut>` |
+| Policies | yes | `ProtocolLimits`, violation action and reply |
+| Session | no | `Connection`, `Session<TIn,TOut>` — pump the pipe through the layers |
 
-Honest layers are tested with plain byte sequences and no sockets. The session is tested with an
-in-memory duplex pipe and a fake `TimeProvider`.
+The honest layers are tested with byte sequences split at every position, mutation fuzzing and no sockets
+(`Axiom.ProtoStream.Testing`); sessions with in-memory pipes and a fake clock.
 
 ## 5. Building blocks
+
+```
+Axiom.ProtoStream/              core: describer, compiler, framing, Wire, connection, session, Raw
+Axiom.ProtoStream.Testing/      CodecHarness, MessageReuseContract, DefinitionAssert, transports
+Protocols/Axiom.ProtoStream.Http/        HTTP/1.1 server role
+Protocols/Axiom.ProtoStream.WebSockets/  RFC 6455, server and client role, HTTP upgrade
+UnitTests/                      one test project per project, same layout; UnitTests/Shared for fixtures
+```
 
 ### Definition
 
 ```csharp
-var echo = Protocol.Describe<EchoMessage, EchoMessage>("echo/1")
-    .Framing(f => f.LengthPrefixed(LengthPrefix.UInt16BigEndian, maxFrameSize: 4096))
-    .Messages(m => m.Discriminator(Discriminator.UInt8)
-        .Add<Hello>(1).Add<Data>(2).Add<Ping>(3).Add<Pong>(4).Add<Bye>(5))
+var chat = Protocol.Describe<ChatMessage, ChatMessage>("chat/1")
+    .Framing(Framers.LengthPrefixed(LengthPrefix.UInt32BigEndian, maxFrameSize: 64 * 1024))
+    .Messages(m => m.Add<Say>(1).Add<Ping>(2).Add<Pong>(3))
     .States(s => s
-        .Start("AwaitHello")
-        .In("AwaitHello").On<Hello>().Delegate().GoTo("Open")
+        .Start("Open")
         .In("Open")
-            .On<Data>().Delegate()
-            .On<Ping>().Respond(p => new Pong { Id = p.Id })
-            .On<Bye>().Respond(_ => new Bye()).GoTo("Closed")
-            .OnSend<Data>()
-        .Final("Closed"))
-    .Limits(l => l.IdleTimeout(TimeSpan.FromSeconds(30)))
+            .On<Say>().Delegate()
+            .On<Ping>().Respond(ping => new Pong())
+            .OnSend<Say>())
     .Build();
 ```
 
-The builder is staged: `Build()` is only reachable after a codec and the states were described.
-`Build()` compiles the description into an immutable `ProtocolDefinition<TIn,TOut>`:
-type ids, per-state transition arrays, per-state readers, limits. It throws a
-`ProtocolDefinitionException` listing **all** problems, and records lint findings in
-`definition.Warnings`.
+The builder is staged: `Build()` is reachable only after a codec and the states were described. `Build()`
+compiles type ids, per-state transition arrays, per-state readers and limits, throws a
+`ProtocolDefinitionException` listing **all** problems, and records lint findings in `Warnings`.
 
-### Inbound actions
-
-| Action | Effect |
+| Inbound action | Effect |
 |---|---|
-| `Delegate()` | The message is yielded to the user's `await foreach`. |
-| `Respond(f)` | The framework writes `f(message)` and keeps reading; the user never sees it. |
-| `Wait()` | The message is consumed silently. |
-| `GoTo(state)` | After the action, the session moves to `state`. Entering a `Final` state ends the session gracefully. |
+| `Delegate()` | Yielded to the user's `await foreach`. |
+| `Respond(f)` | The framework writes `f(message)` and keeps reading; budgeted. |
+| `Wait()` | Consumed silently. |
+| `GoTo(state)` | Moves on after the action; entering a final state ends the session gracefully. |
+
+Outbound: `OnSend<T>()` declares what the user may write in a state; `GoTo`/`GoToIf` move on after the write.
 
 ### Runtime
 
-```csharp
-await using var conn = Connection.FromStream(stream);
-var session = await conn.OpenAsync(echo, ct);
-
-await foreach (var msg in session.Messages.WithCancellation(ct))
-    await session.WriteAsync(msg, ct);
-```
-
-- `Connection` owns the transport, the single write lock and the time provider.
-- `Session<TIn,TOut>` is a typed view over the connection for one protocol.
-- `SwitchAsync` writes a final message, ends the current session and opens the next protocol over the
-  same pipe. Bytes the peer already sent after the switch point are delivered to the new session.
+- `Connection` owns the transport and the single write lock; disposing it closes the session gracefully,
+  completes the pipes and disposes the stream(s).
+- `Session<TIn,TOut>`: read from one loop (`Messages`), write from anywhere. `SwitchAsync` writes a final
+  message (or none), ends the session and opens the next protocol on the same pipe; bytes the peer already sent
+  go to the new session. A transport switch wraps the stream (STARTTLS) and refuses bytes sent too early.
+- A message whose encoding hands the connection over (HTTP 101, 2xx to CONNECT) may only be written by
+  `SwitchAsync` (`WriteResult.ThenHandOver()`).
+- `Raw` is a passthrough protocol for tunnels.
 
 ## 6. Runtime view: one read
 
 ```
 ReadAsync
  ├ release the previous message: advance the pipe, drain an unread payload (bounded)
- ├ bump the read generation (pooled messages from the previous read become stale)
- ├ arm the message timeout
- ├ loop: pipe.ReadAsync → reader(state).TryParse
- │    NeedMore → check MaxBufferedBytes, wait for more
- │    Invalid  → violation policy (close / close with reply / skip when the reader can resync)
- │    Done     → look up transition by message type
- │               Wait → continue · Respond → write reply, continue · Delegate → return message
+ ├ bump the read generation (pooled messages of the previous read become stale)
+ ├ arm the message timeout (first-message or idle)
+ ├ loop: pipe.ReadAsync → reader(state).TryParse → contract checks
+ │    NeedMore → advance what the reader took, check MaxBufferedBytes, wait
+ │    Invalid  → skip when the policy and the reader allow it, else reply (optional) and fault
+ │    Done     → transition by message type: Wait / Respond / Delegate (return)
  └ disarm the timeout
 ```
 
@@ -118,25 +114,29 @@ ReadAsync
 
 ### Memory
 
-- Messages may reference pipe memory until the next read on the session (delayed advance).
-- Codecs that need a payload (HTTP bodies) first **detach** the message head into a session-owned
-  buffer; only then may they claim the payload. The token returned by `Detach` is required by
-  `DoneWithPayload`, so a codec cannot claim a payload while still referencing pipe memory.
-- Pooled message objects carry a `MessageStamp`; using one after the next read throws
-  `StaleMessageException`. `Retain()` returns an owned copy.
+- Messages may reference pipe memory until the next read on the session (delayed advance): zero-copy.
+- A codec that needs a body first **detaches** the head into session memory; `DoneWithPayload` requires the
+  `DetachedHead` token, so a payload can never be claimed while the head still points into the pipe.
+- Payloads (`PipeReader Body`) are read straight from the connection through an `IPayloadDecoder`; an
+  `IPayloadPreamble` sends bytes before the first body read (HTTP `100 Continue`).
+- Pooled messages carry a `MessageStamp` and rotate two instances, so a message kept past the next read throws
+  `StaleMessageException`; `Retain()` returns an owned copy.
+- Every outgoing message is encoded completely before a byte reaches the wire.
+- WebSocket frame payloads are consumed as they arrive, so a frame never has to sit whole in the pipe.
 
 ### Errors
 
-| Exception | At fault |
-|---|---|
-| `ProtocolDefinitionException` | protocol author, at `Build()` |
-| `CodecContractException` | codec author, at runtime (connection aborted) |
-| `ProtocolViolationException` | the peer (connection closed by policy) |
-| `ProtocolStateException` and derived | the calling code (nothing was sent) |
+See [ERROR-HANDLING.md](ERROR-HANDLING.md): definition (author), codec contract (codec), violation (peer),
+state (caller), transport.
 
 ### Safety
 
-See [SECURITY.md](SECURITY.md) for the threat model and defaults.
+See [SECURITY.md](SECURITY.md).
+
+### Diagnostics
+
+`IProtocolObserver` (opened, violation, switch, close, fault) and the `Axiom.ProtoStream` meter. No logging
+dependency.
 
 ## 8. Decisions
 
@@ -145,5 +145,8 @@ See [SECURITY.md](SECURITY.md) for the threat model and defaults.
 | Pull-based sessions consumed with `await foreach` | Natural backpressure, no hidden tasks, the caller owns scheduling. |
 | Exceptions for violations | One loud, typed failure per connection; violations are rare. |
 | Type-based dispatch compiled to arrays | AOT-safe, allocation-free, no user-written discriminator for in-process messages. |
-| Codecs per session from a factory | Removes "codec must be stateless"; codecs may track negotiated state. |
+| Codecs per session from a factory | Codecs may keep state (fragments, the last request) without a "must be stateless" rule. |
 | Detach token for payloads | Encodes "a payload-carrying message must not reference pipe memory". |
+| Framework-owned framing fields | `Content-Length`, `Transfer-Encoding`, `Connection`, `Date` cannot contradict the body. |
+| Fail closed where an RFC allows a choice | Ambiguity between parsers is what smuggling exploits. |
+| Axiom family naming | One product family on NuGet; package id = assembly = root namespace. |
