@@ -78,6 +78,9 @@ internal static class WsFrame
 internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
 {
     private const int StackTextLimit = 512;
+
+    /// <summary>Characters decoded per step while validating text.</summary>
+    private const int ValidationChunk = 256;
     private const int BitsPerByte = 8;
 
     /// <summary>Marks that outgoing messages are not split into fragments.</summary>
@@ -95,6 +98,9 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
     private readonly WsClose[] _closes = [new(), new()];
     private int _next;
     private WsOpcode? _fragmentedOpcode;
+
+    /// <summary>Bytes of the text being assembled already proven to be complete, valid UTF-8.</summary>
+    private int _textValidated;
 
     public WsCodec(bool isServer, WebSocketOptions options)
     {
@@ -180,22 +186,26 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
             {
                 _message.Reset();
                 _fragmentedOpcode = opcode;
+                _textValidated = 0;
             }
 
             Unmask(payload, mask, _message.Append((int)length));
+            bool isText = _fragmentedOpcode == WsOpcode.Text;
+
+            // Section 8.1: invalid UTF-8 fails the connection as soon as it is seen, not when the message ends.
+            if (isText && !IsValidTextSoFar(_message.Memory.Span, isFinal: fin))
+                return context.Invalid(ViolationCode.InvalidData, WsCloseCode.InvalidPayloadData, "A text message is not valid UTF-8.");
+
             if (!fin)
             {
                 offset = frameEnd;
                 continue; // the fragment is copied; look for the next one in the same input
             }
 
-            WsOpcode messageOpcode = _fragmentedOpcode!.Value;
             _fragmentedOpcode = null;
             ReadOnlyMemory<byte> data = _message.Memory;
-            if (messageOpcode == WsOpcode.Text)
+            if (isText)
             {
-                if (!System.Text.Unicode.Utf8.IsValid(data.Span))
-                    return context.Invalid(ViolationCode.InvalidData, WsCloseCode.InvalidPayloadData, "A text message is not valid UTF-8.");
                 WsText text = _texts[_next ^= 1];
                 text.Load(data, context.Stamp);
                 message = text;
@@ -259,6 +269,35 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
     }
 
     public void Dispose() => _message.Dispose();
+
+    /// <summary>
+    /// Validates the text received so far. A code point cut by a fragment boundary is accepted while it can still
+    /// become valid; a byte that can never be part of valid UTF-8 fails at once. Only new bytes are examined.
+    /// </summary>
+    private bool IsValidTextSoFar(ReadOnlySpan<byte> assembled, bool isFinal)
+    {
+        // An unfragmented message is complete: the vectorised validator answers directly.
+        if (isFinal && _textValidated == 0)
+            return System.Text.Unicode.Utf8.IsValid(assembled);
+
+        Span<char> decoded = stackalloc char[ValidationChunk];
+        ReadOnlySpan<byte> pending = assembled[_textValidated..];
+        while (true)
+        {
+            OperationStatus status = System.Text.Unicode.Utf8.ToUtf16(pending, decoded, out int read, out _, replaceInvalidSequences: false, isFinalBlock: isFinal);
+            _textValidated += read;
+            pending = pending[read..];
+            switch (status)
+            {
+                case OperationStatus.DestinationTooSmall:
+                    continue;
+                case OperationStatus.InvalidData:
+                    return false;
+                default:
+                    return true; // Done, or NeedMoreData for a code point the next fragment completes
+            }
+        }
+    }
 
     private ParseResult Control(ref MessageParseContext context, WsOpcode opcode, in ReadOnlySequence<byte> payload, scoped ReadOnlySpan<byte> mask, SequencePosition end, out WsMessage message)
     {

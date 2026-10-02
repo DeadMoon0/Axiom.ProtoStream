@@ -5,6 +5,12 @@
     <Project Path="ProtoStream.WebSockets/ProtoStream.WebSockets.csproj" />
     <Project Path="ProtoStream.Testing/ProtoStream.Testing.csproj" />
   </Folder>
+  <Folder Name="/Benchmarks/">
+    <Project Path="Benchmarks/ProtoStream.Benchmarks/ProtoStream.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/Samples/">
+    <Project Path="Samples/WebSocketEcho/WebSocketEcho.csproj" />
+  </Folder>
   <Folder Name="/UnitTests/">
     <Project Path="UnitTests/ProtoStream.Tests/ProtoStream.Tests.csproj" />
   </Folder>

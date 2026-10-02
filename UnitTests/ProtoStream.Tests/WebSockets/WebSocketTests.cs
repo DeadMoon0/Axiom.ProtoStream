@@ -272,6 +272,30 @@ public sealed class WebSocketTests
         Assert.Equal([Fin | CloseOpcode, 2, (byte)(closeCode >> 8), (byte)closeCode], await ws.ReceiveAsync(4));
     }
 
+    // Section 8.1 and Autobahn 6.4: invalid UTF-8 fails the connection at the fragment that contains it.
+    [Fact]
+    public async Task InvalidUtf8FailsAtTheFragmentThatContainsItNotAtTheEnd()
+    {
+        await using WsPair ws = await WsPair.OpenAsync();
+        // "κόσμε" then a code point above U+10FFFF, in a message whose last fragment never arrives.
+        await ws.SendAsync(ClientFrame(TextOpcode, [0xCE, 0xBA, 0xE1, 0xBD, 0xB9, 0xCF, 0x83, 0xCE, 0xBC, 0xCE, 0xB5, 0xF4, 0x90, 0x80, 0x80]));
+
+        var ex = await Assert.ThrowsAsync<ProtocolViolationException>(() => ws.Session.ReadAsync(Ct).AsTask());
+
+        Assert.Equal(WsCloseCode.InvalidPayloadData, ex.Violation.ProtocolErrorCode);
+    }
+
+    // A code point cut in half by a fragment boundary is valid once the next fragment completes it.
+    [Fact]
+    public async Task ACodePointSplitAcrossFragmentsIsValid()
+    {
+        await using WsPair ws = await WsPair.OpenAsync();
+        byte[] euro = "€"u8.ToArray();
+        await ws.SendAsync(ClientFrame(TextOpcode, euro[..1]), ClientFrame(ContinuationOpcode, euro[1..2]), ClientFrame(Fin | ContinuationOpcode, euro[2..]));
+
+        Assert.Equal("€", Assert.IsType<WsText>((await ws.Session.ReadAsync(Ct)).Message).Text);
+    }
+
     // The limit applies to the declared length: the peer cannot make the server wait for, or buffer, a huge frame.
     [Fact]
     public async Task AnOversizedMessageIsRefusedFromItsHeaderAlone()

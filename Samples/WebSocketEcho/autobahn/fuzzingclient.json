@@ -1,0 +1,9 @@
+{
+  "outdir": "/reports",
+  "servers": [
+    { "agent": "ProtoStream", "url": "ws://host.docker.internal:9001" }
+  ],
+  "cases": ["*"],
+  "exclude-cases": ["12.*", "13.*"],
+  "exclude-agent-cases": {}
+}

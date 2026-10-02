@@ -427,3 +427,6 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Autobahn conformance reports
+Samples/WebSocketEcho/autobahn/reports/
