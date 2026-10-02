@@ -18,6 +18,7 @@
 | Outbound data is validated too. | Header values with CR/LF, delimiters inside delimited frames, oversized strings and invalid close codes throw before a byte is sent. |
 | No half message on the wire. | Every message is encoded completely before it is written; a payload that breaks its announced length faults the session. |
 | Every wait has a deadline. | First-message, idle, payload-read and close timeouts. |
+| Slow peers cannot hold a session. | Minimum data rates for payloads (slow POST) and for output (slow read); only time spent waiting on the peer counts. |
 | Automatic replies are budgeted. | A peer cannot make the framework send more than `AutoRespondBudget` messages per second. |
 | Unread payloads are drained only up to a limit. | `MaxPayloadDrain`. |
 | Turning a protection off is visible. | Named opt-outs only, reported in `ProtocolDefinition.Warnings`; `WarningsAsErrors` for CI. |
@@ -66,6 +67,8 @@ payload encoders. Codecs are created per session. Violation details never contai
 | Buffered message | 1 MiB | 32 KiB head (+4 KiB) | 1 MiB message |
 | Unread payload drain | 1 MiB | 1 MiB | — |
 | Automatic replies | 1000/s | 1000/s | 1000/s |
+| Minimum payload rate | 240 B/s after 5 s | 240 B/s after 5 s (request body) | — |
+| Minimum write rate | 240 B/s after 5 s | 240 B/s after 5 s (responses) | 240 B/s after 5 s |
 | Other | — | request line 8 KiB, 100 fields, body 30 MB, trailers 8 KiB | — |
 
 ## What the host still has to do

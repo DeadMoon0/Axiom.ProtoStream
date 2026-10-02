@@ -29,6 +29,18 @@ public sealed class Http11Options
     /// <summary>Time a kept-alive connection may wait for its next complete request head. Default 130 seconds.</summary>
     public TimeSpan KeepAliveTimeout { get; init; } = TimeSpan.FromSeconds(130);
 
+    /// <summary>
+    /// Least rate a request body must arrive at; null turns it off (a definition warning). Default 240 bytes per
+    /// second after 5 seconds, as Kestrel's MinRequestBodyDataRate.
+    /// </summary>
+    public DataRate? MinRequestBodyRate { get; init; } = DataRate.Default;
+
+    /// <summary>
+    /// Least rate the client must read responses at; null turns it off (a definition warning). Default 240 bytes
+    /// per second after 5 seconds, as Kestrel's MinResponseDataRate.
+    /// </summary>
+    public DataRate? MinResponseRate { get; init; } = DataRate.Default;
+
     /// <summary>Clock for the Date field every response carries (RFC 9110 section 6.6.1).</summary>
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
@@ -73,14 +85,20 @@ public static class Http11
                     // Interim (1xx) responses precede the final one; the request is answered only by the final one.
                     .OnSend<HttpResponse>().GoToIf(response => HttpStatus.IsInformational(response.StatusCode), AwaitResponse, AwaitRequest)
                     .Switchable())
-            .Limits(l => l
+            .Limits(l => DataRates(l
                 .FirstMessageTimeout(options.RequestHeadersTimeout)
                 .IdleTimeout(options.KeepAliveTimeout)
                 .MaxBufferedBytes(options.MaxRequestHeadBytes + BufferHeadroom)
-                .MaxPayloadDrain(options.MaxUnreadBodyDrain))
+                .MaxPayloadDrain(options.MaxUnreadBodyDrain), options))
             .ReplyToViolations(ReplyTo)
             .Flushing(options.CoalescePipelinedResponses ? FlushPolicy.WhileInputIsBuffered : FlushPolicy.EveryWrite)
             .Build();
+    }
+
+    private static LimitsBuilder DataRates(LimitsBuilder limits, Http11Options options)
+    {
+        limits = options.MinRequestBodyRate is { } body ? limits.MinPayloadRate(body) : limits.NoMinPayloadRate();
+        return options.MinResponseRate is { } response ? limits.MinWriteRate(response) : limits.NoMinWriteRate();
     }
 
     // A timeout or a truncated request gets no reply: on an idle kept-alive connection the client may already

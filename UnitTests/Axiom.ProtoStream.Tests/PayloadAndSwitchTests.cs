@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Time.Testing;
 using Axiom.ProtoStream.Codecs;
 using Axiom.ProtoStream.Errors;
 using Axiom.ProtoStream.Framing;
@@ -472,5 +473,87 @@ public sealed class PayloadAndSwitchTests
         var ex = await Assert.ThrowsAsync<ProtocolViolationException>(() => plain.SwitchAsync(
             new Data { Payload = [1] }, Toy.Server().Build(), (stream, _) => ValueTask.FromResult<Stream>(new XorStream(stream, 0x5A)), Ct).AsTask());
         Assert.Equal(ViolationCode.UnexpectedMessage, ex.Violation.Code);
+    }
+
+    // Slow POST: a peer that keeps a body alive with a byte now and then must not hold the session for the idle
+    // timeout per byte. Only time spent waiting on the peer counts, not the application's own pace.
+    [Fact]
+    public async Task APayloadTrickledBelowTheMinimumRateIsCutOff()
+    {
+        var clock = new FakeTimeProvider();
+        TransportPair transport = InMemoryTransport.CreatePair();
+        await using Connection connection = Connection.FromPipe(transport.Server, new ConnectionOptions { TimeProvider = clock });
+        Session<BlobMessage, BlobMessage> server = await connection.OpenAsync(Blobs(), Ct);
+        await transport.Client.Output.WriteAsync(Encoding.ASCII.GetBytes("BLOB 1000\n0123456789"));
+        var blob = Assert.IsType<Blob>((await server.ReadAsync(Ct)).Message);
+        ReadResult first = await blob.Body.ReadAsync();
+        Assert.Equal(10, first.Buffer.Length);
+        blob.Body.AdvanceTo(first.Buffer.End);
+
+        clock.Advance(TimeSpan.FromMinutes(1)); // the application taking its time does not count against the peer
+
+        Task<ReadResult> waiting = blob.Body.ReadAsync().AsTask();
+        clock.Advance(TimeSpan.FromSeconds(4));
+        Assert.False(waiting.IsCompleted);
+        clock.Advance(TimeSpan.FromSeconds(2)); // 6 s waited for 10 bytes: below 240 bytes/s once the 5 s grace is over
+
+        var ex = await Assert.ThrowsAsync<ProtocolViolationException>(() => waiting);
+        Assert.Equal(ViolationCode.Timeout, ex.Violation.Code);
+    }
+
+    [Fact]
+    public async Task APayloadArrivingAboveTheMinimumRateIsNotCutOff()
+    {
+        var clock = new FakeTimeProvider();
+        TransportPair transport = InMemoryTransport.CreatePair();
+        await using Connection connection = Connection.FromPipe(transport.Server, new ConnectionOptions { TimeProvider = clock });
+        Session<BlobMessage, BlobMessage> server = await connection.OpenAsync(Blobs(), Ct);
+        await transport.Client.Output.WriteAsync(Encoding.ASCII.GetBytes("BLOB 2000\n"));
+        var blob = Assert.IsType<Blob>((await server.ReadAsync(Ct)).Message);
+
+        long received = 0;
+        for (int second = 0; second < 2; second++)
+        {
+            Task<ReadResult> waiting = blob.Body.ReadAsync().AsTask();
+            clock.Advance(TimeSpan.FromSeconds(4)); // 1000 bytes every 4 s: 250 bytes/s
+            await transport.Client.Output.WriteAsync(new byte[1000]);
+            ReadResult read = await waiting;
+            received += read.Buffer.Length;
+            blob.Body.AdvanceTo(read.Buffer.End);
+        }
+
+        Assert.Equal(2000, received);
+    }
+
+    // Slow read: a peer that stops taking output must not pin the session and its buffers forever.
+    [Fact]
+    public async Task AWriteThePeerTakesBelowTheMinimumRateFails()
+    {
+        var clock = new FakeTimeProvider();
+        TransportPair transport = InMemoryTransport.CreatePair(new PipeOptions(pauseWriterThreshold: 1024, resumeWriterThreshold: 512, useSynchronizationContext: false));
+        await using Connection connection = Connection.FromPipe(transport.Server, new ConnectionOptions { TimeProvider = clock });
+        Session<ToyMessage, ToyMessage> server = await connection.OpenAsync(Toy.Server().Build(), Ct);
+        await transport.Client.Output.WriteAsync(Toy.HelloFrame("ada"));
+        await server.ReadAsync(Ct);
+
+        Task write = server.WriteAsync(new Data { Payload = new byte[4000] }, Ct).AsTask();
+        clock.Advance(TimeSpan.FromSeconds(10)); // 4003 bytes at 240 bytes/s after 5 s grace: about 21.7 s allowed
+        Assert.False(write.IsCompleted);
+        clock.Advance(TimeSpan.FromSeconds(15));
+
+        await Assert.ThrowsAsync<TransportException>(() => write.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(SessionStatus.Faulted, server.Status);
+    }
+
+    [Fact]
+    public void TurningTheMinimumRatesOffIsAWarning()
+    {
+        ProtocolDefinition<ToyMessage, ToyMessage> definition = Toy.Server().Limits(l => l.NoMinPayloadRate().NoMinWriteRate()).Build();
+
+        Assert.Null(definition.Limits.MinPayloadRate);
+        Assert.Null(definition.Limits.MinWriteRate);
+        Assert.Contains(definition.Warnings, w => w.Contains("minimum payload rate", StringComparison.Ordinal));
+        Assert.Contains(definition.Warnings, w => w.Contains("minimum write rate", StringComparison.Ordinal));
+        Assert.Equal(DataRate.Default, Toy.Server().Build().Limits.MinPayloadRate);
     }
 }

@@ -12,7 +12,12 @@ namespace Axiom.ProtoStream.Internal;
 /// <summary>What a <see cref="PayloadReader"/> needs from its session.</summary>
 internal interface IPayloadHost
 {
-    void ArmPayloadTimeout();
+    /// <summary>Arms the session's read timer for one payload read.</summary>
+    void ArmPayloadTimeout(TimeSpan due);
+
+    ProtocolLimits Limits { get; }
+
+    TimeProvider Time { get; }
 
     void DisarmTimeout();
 
@@ -52,6 +57,8 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
     private bool _emptyPayload;
     private bool _inputAfterEnd;
     private int _outstanding;
+    private long _received;
+    private TimeSpan _waited;
 
     public bool IsActive => _decoder is not null && !_ended;
 
@@ -87,6 +94,8 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
         _dataPending = false;
         _completedByUser = false;
         _inputAfterEnd = false;
+        _received = 0;
+        _waited = TimeSpan.Zero;
         _emptyPayload = EndsWithoutInput();
     }
 
@@ -236,20 +245,34 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
         if (_ended || EndsWithoutInput())
             return Ended();
 
-        host.ArmPayloadTimeout();
+        TimeSpan allowed = Allowance();
+        if (allowed <= TimeSpan.Zero)
+            throw host.PayloadViolation(ViolationCode.Timeout, SlowPayload());
+
+        host.ArmPayloadTimeout(allowed);
         try
         {
             while (true)
             {
                 ValueTask<ReadResult> pending = _inner!.ReadAsync(cancellationToken);
-                if (!pending.IsCompleted)
+                ReadResult read;
+                if (pending.IsCompleted)
+                {
+                    read = await pending.ConfigureAwait(false);
+                }
+                else
+                {
                     await host.FlushDeferredAsync(cancellationToken).ConfigureAwait(false);
-                ReadResult read = await pending.ConfigureAwait(false);
+                    long started = host.Time.GetTimestamp();
+                    read = await pending.ConfigureAwait(false);
+                    _waited += host.Time.GetElapsedTime(started);
+                }
+
                 if (read.IsCanceled)
                 {
                     _inner.AdvanceTo(read.Buffer.Start);
                     if (host.TimedOut)
-                        throw host.PayloadViolation(ViolationCode.Timeout, "The payload did not arrive in time.");
+                        throw host.PayloadViolation(ViolationCode.Timeout, SlowPayload());
                     return new ReadResult(default, isCanceled: true, isCompleted: false);
                 }
 
@@ -272,6 +295,7 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
         switch (step.Kind)
         {
             case PayloadStepKind.Data when step.Length > 0:
+                _received += step.Length;
                 _data = buffer.Slice(step.Skip, step.Length);
                 _dataPending = true;
                 result = new ReadResult(_data, isCanceled: false, isCompleted: false);
@@ -299,6 +323,23 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
                 return false;
         }
     }
+
+    /// <summary>
+    /// How long the next read may wait: the idle timeout, or less when the payload has used up the time its
+    /// minimum rate allows for the bytes received so far. Only time spent waiting on the peer counts.
+    /// </summary>
+    private TimeSpan Allowance()
+    {
+        TimeSpan idle = host.Limits.IdleTimeout;
+        if (host.Limits.MinPayloadRate is not { } rate)
+            return idle;
+        TimeSpan left = rate.AllowedFor(_received) - _waited;
+        return idle == Timeout.InfiniteTimeSpan || left < idle ? left : idle;
+    }
+
+    private string SlowPayload() => host.Limits.MinPayloadRate is { } rate
+        ? $"The payload did not arrive in time, or slower than {rate.BytesPerSecond} bytes per second."
+        : "The payload did not arrive in time.";
 
     // A payload that is already complete (for example a fixed length fully consumed) must end without
     // waiting for connection bytes that belong to the next message, or may never come.

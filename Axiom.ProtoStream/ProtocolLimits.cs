@@ -30,6 +30,18 @@ public sealed class ProtocolLimits
     /// <summary>Most messages per second the framework sends on its own (replies, greetings). Default 1000.</summary>
     public int AutoRespondBudget { get; init; } = 1000;
 
+    /// <summary>
+    /// Least rate a payload (a request body) must arrive at while the session waits for it; null when turned off.
+    /// Default <see cref="DataRate.Default"/>. Guards against peers that trickle a body to hold the session.
+    /// </summary>
+    public DataRate? MinPayloadRate { get; init; } = DataRate.Default;
+
+    /// <summary>
+    /// Least rate the peer must take output at while a write waits for it; null when turned off. Default
+    /// <see cref="DataRate.Default"/>. Guards against peers that read slowly to hold the session and its buffers.
+    /// </summary>
+    public DataRate? MinWriteRate { get; init; } = DataRate.Default;
+
     internal bool HasFirstMessageTimeout => FirstMessageTimeout != Timeout.InfiniteTimeSpan;
 
     internal bool HasIdleTimeout => IdleTimeout != Timeout.InfiniteTimeSpan;
@@ -41,6 +53,8 @@ public sealed class ProtocolLimits
 public sealed class LimitsBuilder
 {
     private ProtocolLimits _limits = ProtocolLimits.Default;
+    private bool _minPayloadRateOff;
+    private bool _minWriteRateOff;
 
     internal ProtocolLimits Limits => _limits;
 
@@ -99,6 +113,40 @@ public sealed class LimitsBuilder
         return this;
     }
 
+    /// <summary>Least rate a payload must arrive at while the session waits for it.</summary>
+    public LimitsBuilder MinPayloadRate(DataRate rate)
+    {
+        ArgumentNullException.ThrowIfNull(rate);
+        _limits = With(minPayloadRate: rate);
+        return this;
+    }
+
+    /// <summary>Least rate the peer must take output at while a write waits for it.</summary>
+    public LimitsBuilder MinWriteRate(DataRate rate)
+    {
+        ArgumentNullException.ThrowIfNull(rate);
+        _limits = With(minWriteRate: rate);
+        return this;
+    }
+
+    /// <summary>Opt-out: a payload may arrive arbitrarily slowly within the idle timeout per read. Recorded as a definition warning.</summary>
+    public LimitsBuilder NoMinPayloadRate()
+    {
+        OptOuts.Add("The minimum payload rate is off: a peer that sends a byte now and then holds a payload, and the session, open.");
+        _minPayloadRateOff = true;
+        _limits = With();
+        return this;
+    }
+
+    /// <summary>Opt-out: the peer may take output arbitrarily slowly. Recorded as a definition warning.</summary>
+    public LimitsBuilder NoMinWriteRate()
+    {
+        OptOuts.Add("The minimum write rate is off: a peer that reads slowly holds every write, and the session, forever.");
+        _minWriteRateOff = true;
+        _limits = With();
+        return this;
+    }
+
     /// <summary>Opt-out: the first message may take forever. Recorded as a definition warning.</summary>
     public LimitsBuilder NoFirstMessageTimeout()
     {
@@ -133,7 +181,8 @@ public sealed class LimitsBuilder
 
     private ProtocolLimits With(
         TimeSpan? firstMessageTimeout = null, TimeSpan? idleTimeout = null, TimeSpan? closeTimeout = null,
-        int? maxBufferedBytes = null, long? maxPayloadDrain = null, int? autoRespondBudget = null) => new()
+        int? maxBufferedBytes = null, long? maxPayloadDrain = null, int? autoRespondBudget = null,
+        DataRate? minPayloadRate = null, DataRate? minWriteRate = null) => new()
     {
         FirstMessageTimeout = firstMessageTimeout ?? _limits.FirstMessageTimeout,
         IdleTimeout = idleTimeout ?? _limits.IdleTimeout,
@@ -141,5 +190,7 @@ public sealed class LimitsBuilder
         MaxBufferedBytes = maxBufferedBytes ?? _limits.MaxBufferedBytes,
         MaxPayloadDrain = maxPayloadDrain ?? _limits.MaxPayloadDrain,
         AutoRespondBudget = autoRespondBudget ?? _limits.AutoRespondBudget,
+        MinPayloadRate = _minPayloadRateOff ? null : minPayloadRate ?? _limits.MinPayloadRate,
+        MinWriteRate = _minWriteRateOff ? null : minWriteRate ?? _limits.MinWriteRate,
     };
 }

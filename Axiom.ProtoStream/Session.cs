@@ -993,6 +993,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     private ValueTask FlushAsync(CancellationToken cancellationToken)
     {
         Volatile.Write(ref _flushDeferred, 0);
+        long flushing = _output.CanGetUnflushedBytes ? _output.UnflushedBytes : 0;
         ValueTask<FlushResult> pending;
         try
         {
@@ -1004,12 +1005,19 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         }
 
         if (!pending.IsCompletedSuccessfully)
-            return AwaitFlushAsync(pending);
+            return AwaitFlushAsync(pending, flushing);
         return PeerStoppedReading(pending.Result) is { } failure ? ValueTask.FromException(failure) : default;
     }
 
-    private async ValueTask AwaitFlushAsync(ValueTask<FlushResult> pending)
+    /// <summary>A flush that waits on the peer, bounded by the minimum write rate for the bytes it carries.</summary>
+    private async ValueTask AwaitFlushAsync(ValueTask<FlushResult> pending, long flushing)
     {
+        // Allocated only when a flush actually waits; a reader that keeps up never gets here.
+        using CancellationTokenSource? slow = _limits.MinWriteRate is { } rate
+            ? new CancellationTokenSource(rate.AllowedFor(flushing), _time)
+            : null;
+        using CancellationTokenRegistration cutOff = slow?.Token.UnsafeRegister(static output => ((PipeWriter)output!).CancelPendingFlush(), _output) ?? default;
+
         FlushResult flushed;
         try
         {
@@ -1020,6 +1028,8 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             throw Fault(new TransportException("Writing to the connection failed.", ex));
         }
 
+        if (flushed.IsCanceled && slow is { IsCancellationRequested: true })
+            throw Fault(new TransportException($"The peer took output slower than {_limits.MinWriteRate!.BytesPerSecond} bytes per second.", new IOException("The minimum write rate was not met.")));
         if (PeerStoppedReading(flushed) is { } failure)
             throw failure;
     }
@@ -1175,7 +1185,11 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
 
     // ---- payload host --------------------------------------------------------------------------
 
-    void IPayloadHost.ArmPayloadTimeout() => _timer.Arm(_limits.IdleTimeout);
+    void IPayloadHost.ArmPayloadTimeout(TimeSpan due) => _timer.Arm(due);
+
+    ProtocolLimits IPayloadHost.Limits => _limits;
+
+    TimeProvider IPayloadHost.Time => _time;
 
     void IPayloadHost.DisarmTimeout() => _timer.Disarm();
 
