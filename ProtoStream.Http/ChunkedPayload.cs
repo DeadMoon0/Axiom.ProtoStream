@@ -7,11 +7,19 @@ namespace ProtoStream.Http;
 
 /// <summary>
 /// Decodes the chunked transfer coding (RFC 9112 section 7.1) straight from the connection buffer. Chunk
-/// data is handed out as slices, never copied; sizes, extensions and trailers are bounded.
+/// data is handed out as slices, never copied; sizes, extensions and trailers are validated and bounded.
 /// </summary>
 public sealed class ChunkedPayloadDecoder : IPayloadDecoder
 {
-    private const int MaxSizeLine = 16 + 2 + 256; // hex digits, CRLF, extensions
+    /// <summary>Most hex digits of a chunk size: 15 digits cannot overflow a 64-bit length.</summary>
+    private const int MaxSizeDigits = 15;
+
+    /// <summary>Most bytes of chunk extensions on one size line.</summary>
+    private const int MaxExtensionBytes = 256;
+
+    /// <summary>Format code for hexadecimal numbers in <see cref="Utf8Parser"/> and <see cref="Utf8Formatter"/>.</summary>
+    internal const char HexFormat = 'X';
+
     private State _state;
     private long _remainingInChunk;
     private long _total;
@@ -27,6 +35,9 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
         Trailer,
         Done,
     }
+
+    /// <summary>Longest size line: digits, extensions and the line end.</summary>
+    private static int MaxSizeLine => MaxSizeDigits + MaxExtensionBytes + HttpGrammar.Crlf.Length;
 
     /// <summary>Prepares the decoder for a body of at most <paramref name="maxBodySize"/> bytes and <paramref name="maxTrailerBytes"/> of trailers.</summary>
     public void Reset(long maxBodySize, int maxTrailerBytes)
@@ -50,10 +61,11 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
             {
                 case State.Size:
                 {
+                    // chunk = chunk-size [ chunk-ext ] CRLF chunk-data CRLF
                     if (!TryReadLine(rest, MaxSizeLine, out ReadOnlySequence<byte> line, out long lineLength, out bool tooLong))
                         return tooLong ? PayloadStep.Invalid(ViolationCode.LimitExceeded, "A chunk size line is too long.") : NeedMore(skip, isCompleted);
                     if (!TryParseSize(line, out long size))
-                        return PayloadStep.Invalid(ViolationCode.Malformed, "A chunk size is malformed.");
+                        return PayloadStep.Invalid(ViolationCode.Malformed, "A chunk size line is malformed.");
 
                     _total += size;
                     if (size > _maxTotal || _total > _maxTotal)
@@ -70,19 +82,20 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
 
                 case State.DataEnd:
                 {
-                    if (rest.Length < 2)
+                    if (rest.Length < HttpGrammar.Crlf.Length)
                         return NeedMore(skip, isCompleted);
-                    var crlf = new SequenceReader<byte>(rest);
-                    if (!crlf.IsNext("\r\n"u8))
+                    var reader = new SequenceReader<byte>(rest);
+                    if (!reader.IsNext(HttpGrammar.Crlf))
                         return PayloadStep.Invalid(ViolationCode.Malformed, "Chunk data is not followed by CRLF.");
-                    skip += 2;
+                    skip += HttpGrammar.Crlf.Length;
                     _state = State.Size;
                     continue;
                 }
 
                 case State.Trailer:
                 {
-                    if (!TryReadLine(rest, _maxTrailerBytes - _trailerBytes + 2, out ReadOnlySequence<byte> line, out long lineLength, out bool tooLong))
+                    long allowed = _maxTrailerBytes - _trailerBytes + HttpGrammar.Crlf.Length;
+                    if (!TryReadLine(rest, allowed, out ReadOnlySequence<byte> line, out long lineLength, out bool tooLong))
                         return tooLong ? PayloadStep.Invalid(ViolationCode.LimitExceeded, "The trailer section is too large.") : NeedMore(skip, isCompleted);
                     skip += lineLength;
                     if (line.IsEmpty)
@@ -91,6 +104,9 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
                         return PayloadStep.End(skip);
                     }
 
+                    // Trailer fields have field-line syntax (RFC 9112 section 7.1.2); they are checked, then discarded.
+                    if (!IsFieldLine(line))
+                        return PayloadStep.Invalid(ViolationCode.Malformed, "A trailer field is malformed.");
                     _trailerBytes += (int)lineLength;
                     continue;
                 }
@@ -116,7 +132,7 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
     {
         ReadOnlySequence<byte> window = input.Length > maxLength ? input.Slice(0, maxLength) : input;
         var reader = new SequenceReader<byte>(window);
-        if (reader.TryReadTo(out line, "\r\n"u8, advancePastDelimiter: true))
+        if (reader.TryReadTo(out line, HttpGrammar.Crlf, advancePastDelimiter: true))
         {
             consumed = reader.Consumed;
             tooLong = false;
@@ -131,38 +147,85 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
     private static bool TryParseSize(in ReadOnlySequence<byte> line, out long size)
     {
         size = 0;
-        Span<byte> buffer = stackalloc byte[MaxSizeLine];
         if (line.Length > MaxSizeLine)
             return false;
+        Span<byte> buffer = stackalloc byte[MaxSizeLine];
         line.CopyTo(buffer);
         ReadOnlySpan<byte> span = buffer[..(int)line.Length];
 
         int digits = 0;
-        while (digits < span.Length && IsHex(span[digits]))
+        while (digits < span.Length && char.IsAsciiHexDigit((char)span[digits]))
             digits++;
-        if (digits is 0 or > 15)
+        if (digits is 0 or > MaxSizeDigits)
             return false;
 
-        // After the size only chunk extensions may follow: optional whitespace, then ';'.
-        ReadOnlySpan<byte> rest = HttpSyntax.TrimWhitespace(span[digits..]);
-        if (!rest.IsEmpty && rest[0] != ';')
-            return false;
-        if (rest.IndexOfAny(HttpSyntax.InvalidValue) >= 0)
-            return false;
-
-        return Utf8Parser.TryParse(span[..digits], out size, out int used, 'X') && used == digits;
+        return IsChunkExtensions(span[digits..]) && Utf8Parser.TryParse(span[..digits], out size, out int used, HexFormat) && used == digits;
     }
 
-    private static bool IsHex(byte b) => b is >= (byte)'0' and <= (byte)'9' or >= (byte)'a' and <= (byte)'f' or >= (byte)'A' and <= (byte)'F';
+    /// <summary>
+    /// chunk-ext = *( BWS ";" BWS chunk-ext-name [ BWS "=" BWS chunk-ext-val ] ), where the name is a token and the
+    /// value a token or quoted-string (RFC 9112 section 7.1.1). Extensions are validated, then ignored.
+    /// </summary>
+    private static bool IsChunkExtensions(ReadOnlySpan<byte> extensions)
+    {
+        while (true)
+        {
+            extensions = SkipWhitespace(extensions);
+            if (extensions.IsEmpty)
+                return true;
+            if (extensions[0] != HttpGrammar.Semicolon)
+                return false;
+            extensions = SkipWhitespace(extensions[1..]);
+
+            int nameLength = TokenLength(extensions);
+            if (nameLength == 0)
+                return false;
+            extensions = extensions[nameLength..];
+
+            ReadOnlySpan<byte> afterName = SkipWhitespace(extensions);
+            if (afterName.IsEmpty || afterName[0] != HttpGrammar.EqualsSign)
+                continue;
+
+            extensions = SkipWhitespace(afterName[1..]);
+            int valueLength = !extensions.IsEmpty && extensions[0] == HttpGrammar.Quote
+                ? HttpSyntax.QuotedStringLength(extensions)
+                : TokenLength(extensions);
+            if (valueLength <= 0)
+                return false;
+            extensions = extensions[valueLength..];
+        }
+    }
+
+    private static ReadOnlySpan<byte> SkipWhitespace(ReadOnlySpan<byte> value) => value[HttpSyntax.LeadingWhitespace(value)..];
+
+    private static int TokenLength(ReadOnlySpan<byte> value)
+    {
+        int end = value.IndexOfAnyExcept(HttpSyntax.Token);
+        return end < 0 ? value.Length : end;
+    }
+
+    /// <summary>field-line = field-name ":" OWS field-value OWS, without obs-fold.</summary>
+    private static bool IsFieldLine(in ReadOnlySequence<byte> line)
+    {
+        ReadOnlySpan<byte> span = line.IsSingleSegment ? line.FirstSpan : line.ToArray();
+        int colon = span.IndexOf(HttpGrammar.Colon);
+        return colon > 0 && HttpSyntax.IsToken(span[..colon]) && HttpSyntax.IsFieldValue(HttpSyntax.TrimWhitespace(span[(colon + 1)..]));
+    }
 }
 
 /// <summary>Encodes a body with the chunked transfer coding.</summary>
 public sealed class ChunkedPayloadEncoder : IPayloadEncoder
 {
+    /// <summary>Hex digits of the largest chunk this encoder writes: an <see cref="int"/> length.</summary>
+    private const int MaxSizeDigits = sizeof(int) * 2;
+
     private ChunkedPayloadEncoder() { }
 
     /// <summary>The shared instance; the encoder is stateless.</summary>
     public static ChunkedPayloadEncoder Instance { get; } = new();
+
+    /// <summary>last-chunk with an empty trailer section: "0" CRLF CRLF.</summary>
+    private static ReadOnlySpan<byte> LastChunk => "0\r\n\r\n"u8;
 
     /// <inheritdoc />
     public void WriteData(ReadOnlySpan<byte> data, IBufferWriter<byte> output)
@@ -170,15 +233,14 @@ public sealed class ChunkedPayloadEncoder : IPayloadEncoder
         if (data.IsEmpty)
             return; // an empty chunk would end the body
 
-        Span<byte> size = output.GetSpan(18);
-        Utf8Formatter.TryFormat((ulong)data.Length, size, out int written, 'x');
-        size[written++] = (byte)'\r';
-        size[written++] = (byte)'\n';
+        Span<byte> size = output.GetSpan(MaxSizeDigits);
+        Utf8Formatter.TryFormat((uint)data.Length, size, out int written, ChunkedPayloadDecoder.HexFormat);
         output.Advance(written);
+        output.Write(HttpGrammar.Crlf);
         output.Write(data);
-        output.Write("\r\n"u8);
+        output.Write(HttpGrammar.Crlf);
     }
 
     /// <inheritdoc />
-    public void WriteEnd(IBufferWriter<byte> output) => output.Write("0\r\n\r\n"u8);
+    public void WriteEnd(IBufferWriter<byte> output) => output.Write(LastChunk);
 }

@@ -18,7 +18,7 @@ public sealed class HttpResponse
     /// <summary>Creates a response with the given status code and no content.</summary>
     public HttpResponse(int statusCode)
     {
-        if (statusCode is < 100 or > 999)
+        if (statusCode is < HttpStatus.MinValue or > HttpStatus.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(statusCode), statusCode, "An HTTP status code has three digits.");
         StatusCode = statusCode;
     }
@@ -85,7 +85,46 @@ public sealed class HttpResponse
     /// <summary>An empty error response that closes the connection.</summary>
     public static HttpResponse Error(int statusCode) => new(statusCode) { CloseConnection = true };
 
-    internal string Reason => _reasonPhrase ?? HttpSyntax.ReasonPhrase(StatusCode);
+    /// <summary>
+    /// <c>101 Switching Protocols</c> to <paramref name="protocol"/>, which the request must have offered in its
+    /// Upgrade field. It hands the connection over, so it is sent with <c>Session.SwitchAsync</c>.
+    /// </summary>
+    public static HttpResponse SwitchingProtocols(string protocol)
+    {
+        var response = new HttpResponse(HttpStatus.SwitchingProtocols);
+        response.Headers.Add("Upgrade", protocol);
+        return response;
+    }
+
+    /// <summary>
+    /// <c>200</c> to a CONNECT request: the connection becomes a tunnel, so it is sent with
+    /// <c>Session.SwitchAsync</c>, typically to <c>Raw.Definition</c>.
+    /// </summary>
+    public static HttpResponse ConnectionEstablished() => new(HttpStatus.Ok);
+
+    internal string Reason => _reasonPhrase ?? HttpStatus.ReasonPhrase(StatusCode);
+
+    internal bool HasField(string name)
+    {
+        foreach (KeyValuePair<string, string> field in Headers.Fields)
+        {
+            if (field.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    internal string? FieldValue(string name)
+    {
+        foreach (KeyValuePair<string, string> field in Headers.Fields)
+        {
+            if (field.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
+                return field.Value;
+        }
+
+        return null;
+    }
 }
 
 /// <summary>The header fields of a response, validated when added so nothing malformed reaches the wire.</summary>

@@ -39,6 +39,22 @@ public enum HttpRequestMethod
     Patch,
 }
 
+/// <summary>The four forms of a request target (RFC 9112 section 3.2).</summary>
+public enum RequestTargetForm
+{
+    /// <summary>absolute-path [ "?" query ], as in <c>GET /index.html?q=1</c>.</summary>
+    Origin,
+
+    /// <summary>An absolute URI, as in <c>GET http://example.org/index.html</c>; mostly sent to proxies.</summary>
+    Absolute,
+
+    /// <summary>host ":" port, only for CONNECT.</summary>
+    Authority,
+
+    /// <summary>"*", only for a server-wide OPTIONS.</summary>
+    Asterisk,
+}
+
 /// <summary>HTTP versions this package speaks.</summary>
 public enum HttpProtocolVersion
 {
@@ -76,6 +92,18 @@ public sealed class HttpRequest
     private bool _isUpgrade;
     private PipeReader _body = null!;
     private string? _target;
+    private RequestTargetForm _targetForm;
+    private int _pathStart;
+    private int _pathLength;
+    private int _queryStart;
+    private int _queryLength;
+    private int _authorityStart;
+    private int _authorityLength;
+    private int _hostField;
+    private bool _expectsContinue;
+
+    /// <summary>Marks an absent part of the target.</summary>
+    private const int Absent = -1;
 
     internal HttpRequest()
     {
@@ -104,6 +132,46 @@ public sealed class HttpRequest
 
     /// <summary>The request target as a string, created on first use.</summary>
     public string Target => Current()._target ??= Encoding.ASCII.GetString(_head.Span.Slice(_targetStart, _targetLength));
+
+    /// <summary>Which of the four request-target forms was used.</summary>
+    public RequestTargetForm TargetForm => Current()._targetForm;
+
+    /// <summary>The path of an origin-form or absolute-form target, still percent-encoded; empty for the other forms.</summary>
+    public string Path => Encoding.ASCII.GetString(PathBytes.Span);
+
+    /// <summary>The path bytes, still percent-encoded.</summary>
+    public ReadOnlyMemory<byte> PathBytes => Current()._head.Slice(_pathStart, _pathLength);
+
+    /// <summary>True when the target has a query component, even an empty one.</summary>
+    public bool HasQuery => Current()._queryStart != Absent;
+
+    /// <summary>The query without its "?", still percent-encoded; empty when there is none.</summary>
+    public string Query => Encoding.ASCII.GetString(QueryBytes.Span);
+
+    /// <summary>The query bytes without the "?", still percent-encoded.</summary>
+    public ReadOnlyMemory<byte> QueryBytes => Current()._queryStart == Absent ? ReadOnlyMemory<byte>.Empty : _head.Slice(_queryStart, _queryLength);
+
+    /// <summary>
+    /// The authority the request is for (RFC 9110 section 7.2): the target's authority for absolute-form and
+    /// authority-form, otherwise the Host field. RFC 9112 section 3.2.2 makes the target win over Host.
+    /// </summary>
+    public string Authority
+    {
+        get
+        {
+            Current();
+            if (_authorityStart != Absent)
+                return Encoding.ASCII.GetString(_head.Span.Slice(_authorityStart, _authorityLength));
+            return _hostField == Absent ? string.Empty : Headers[_hostField].Value;
+        }
+    }
+
+    /// <summary>
+    /// True when the client sent <c>Expect: 100-continue</c> and waits before sending the body. The framework
+    /// answers <c>100 Continue</c> when the body is first read; a final response sent without reading it closes
+    /// the connection, so the client is never left waiting.
+    /// </summary>
+    public bool ExpectsContinue => Current()._expectsContinue;
 
     /// <summary>The HTTP version of the request.</summary>
     public HttpProtocolVersion Version => Current()._version;
@@ -137,7 +205,8 @@ public sealed class HttpRequest
         copy.Load(_head.ToArray(), default, _methodStart, _methodLength, _targetStart, _targetLength, _method, _version);
         for (int i = 0; i < _headerCount; i++)
             copy.AddHeader(_headers[i]);
-        copy.SetSemantics(_contentLength, _isChunked, _keepAlive, _isUpgrade);
+        copy.SetTarget(_targetForm, _pathStart, _pathLength, _queryStart, _queryLength, _authorityStart, _authorityLength);
+        copy.SetSemantics(_contentLength, _isChunked, _keepAlive, _isUpgrade, _expectsContinue, _hostField);
         copy._body = PipeReader.Create(System.Buffers.ReadOnlySequence<byte>.Empty);
         return copy;
     }
@@ -175,6 +244,20 @@ public sealed class HttpRequest
         _keepAlive = false;
         _isUpgrade = false;
         _target = null;
+        _expectsContinue = false;
+        _hostField = Absent;
+        SetTarget(RequestTargetForm.Origin, 0, 0, Absent, 0, Absent, 0);
+    }
+
+    internal void SetTarget(RequestTargetForm form, int pathStart, int pathLength, int queryStart, int queryLength, int authorityStart, int authorityLength)
+    {
+        _targetForm = form;
+        _pathStart = pathStart;
+        _pathLength = pathLength;
+        _queryStart = queryStart;
+        _queryLength = queryLength;
+        _authorityStart = authorityStart;
+        _authorityLength = authorityLength;
     }
 
     internal void AddHeader(HeaderEntry entry)
@@ -184,13 +267,17 @@ public sealed class HttpRequest
         _headers[_headerCount++] = entry;
     }
 
-    internal void SetSemantics(long? contentLength, bool isChunked, bool keepAlive, bool isUpgrade)
+    internal void SetSemantics(long? contentLength, bool isChunked, bool keepAlive, bool isUpgrade, bool expectsContinue, int hostField)
     {
         _contentLength = contentLength;
         _isChunked = isChunked;
         _keepAlive = keepAlive;
         _isUpgrade = isUpgrade;
+        _expectsContinue = expectsContinue;
+        _hostField = hostField;
     }
+
+    internal const int NoPart = Absent;
 
     internal void SetBody(PipeReader body) => _body = body;
 }
@@ -223,6 +310,9 @@ public readonly struct HttpHeader
 /// <summary>The header fields of a request. Names compare case-insensitively.</summary>
 public readonly struct HttpRequestHeaders
 {
+    /// <summary>Longest token <see cref="ContainsToken"/> looks for.</summary>
+    private const int MaxTokenLength = 256;
+
     private readonly HttpRequest _request;
 
     internal HttpRequestHeaders(HttpRequest request) => _request = request;
@@ -266,9 +356,10 @@ public readonly struct HttpRequestHeaders
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(token);
-        Span<byte> tokenBytes = stackalloc byte[Math.Min(token.Length, 256)];
-        if (token.Length > 256 || Encoding.ASCII.GetBytes(token, tokenBytes) != token.Length)
+        if (token.Length > MaxTokenLength || !HttpSyntax.IsToken(token))
             return false;
+        Span<byte> tokenBytes = stackalloc byte[token.Length];
+        Encoding.ASCII.GetBytes(token, tokenBytes);
 
         ReadOnlySpan<byte> head = _request.Current().HeadSpan;
         for (int i = 0; i < _request.HeaderCount; i++)

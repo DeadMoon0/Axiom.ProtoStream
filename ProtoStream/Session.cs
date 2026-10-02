@@ -195,7 +195,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             try
             {
                 if (protocolSwitch.FinalMessage is { } finalMessage)
-                    await WriteLockedAsync(finalMessage, WriteMode.Automatic, cancellationToken).ConfigureAwait(false);
+                    await WriteLockedAsync(finalMessage, WriteMode.Switch, cancellationToken).ConfigureAwait(false);
                 SetStatus(SessionStatus.Switched);
                 ReleaseResources();
             }
@@ -511,6 +511,9 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
 
         /// <summary>Closing message: applies a transition when the state describes one.</summary>
         Closing,
+
+        /// <summary>The final message of a switch: no check, no transition, may hand the connection over.</summary>
+        Switch,
     }
 
     private async ValueTask WriteMessageAsync(TOut message, WriteMode mode, CancellationToken cancellationToken)
@@ -543,7 +546,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         ThrowIfNotWritable();
 
         OutboundTransition<TOut> transition = default;
-        if (mode != WriteMode.Automatic)
+        if (mode is WriteMode.User or WriteMode.Closing)
         {
             int typeId = _definition.OutboundTypes.Find(message.GetType());
             CompiledState<TIn, TOut> state = _states[Volatile.Read(ref _state)];
@@ -554,6 +557,9 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         }
 
         WriteResult result = Encode(message);
+        if (result.HandsOver && mode != WriteMode.Switch)
+            throw new ProtocolStateException($"{message.GetType().Name} hands the connection over to another protocol.") { Guidance = "Send it through SwitchAsync." };
+        _output.Write(_writeBuffer.WrittenSpan);
         if (result.Payload is not null)
             await StreamPayloadAsync(result, cancellationToken).ConfigureAwait(false);
         await FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -583,8 +589,8 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             await WriteLockedAsync(enter(), WriteMode.Automatic, cancellationToken).ConfigureAwait(false);
     }
 
-    // Every message is encoded completely before a byte reaches the connection, so a codec or a message
-    // that fails half-way can never leave half a message on the wire.
+    // Every message is encoded completely into the session buffer before a byte reaches the connection, so a
+    // codec or a message that fails half-way can never leave half a message on the wire.
     private WriteResult Encode(TOut message)
     {
         _writeBuffer.Reset();
@@ -602,7 +608,6 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             throw new CodecContractException($"The codec {_codec.GetType().Name} threw while writing {message.GetType().Name}.", ex);
         }
 
-        _output.Write(_writeBuffer.WrittenSpan);
         return result;
     }
 
@@ -797,6 +802,21 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     bool IPayloadHost.TimedOut => _timer.Fired;
 
     Exception IPayloadHost.PayloadViolation(ViolationCode code, string detail) => ViolationNow(code, detail, SessionStatus.Faulted);
+
+    async ValueTask IPayloadHost.WritePreambleAsync(ReadOnlyMemory<byte> preamble, CancellationToken cancellationToken)
+    {
+        await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfNotWritable();
+            _output.Write(preamble.Span);
+            await FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _connection.WriteLock.Release();
+        }
+    }
 
     private sealed class ExceptionHolder(Exception exception)
     {

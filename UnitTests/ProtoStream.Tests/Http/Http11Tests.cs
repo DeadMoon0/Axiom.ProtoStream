@@ -7,15 +7,21 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Time.Testing;
 using ProtoStream.Errors;
 using ProtoStream.Http;
 using ProtoStream.Testing;
 
 namespace ProtoStream.Tests.Http;
 
-public sealed class Http11Tests
+public sealed partial class Http11Tests
 {
     private static readonly CancellationToken Ct = CancellationToken.None;
+
+    /// <summary>The date of RFC 9110's own IMF-fixdate example, so responses are byte-exact.</summary>
+    internal static readonly FakeTimeProvider Clock = new(new DateTimeOffset(1994, 11, 6, 8, 49, 37, TimeSpan.Zero));
+
+    internal const string DateField = "Date: Sun, 06 Nov 1994 08:49:37 GMT\r\n";
 
     private sealed class HttpPair : IAsyncDisposable
     {
@@ -38,7 +44,7 @@ public sealed class Http11Tests
         {
             TransportPair transport = InMemoryTransport.CreatePair();
             Connection connection = Connection.FromPipe(transport.Server);
-            Session<HttpRequest, HttpResponse> session = await connection.OpenAsync(options is null ? Http11.Server() : Http11.Server(options), Ct);
+            Session<HttpRequest, HttpResponse> session = await connection.OpenAsync(Http11.Server(options ?? new Http11Options { TimeProvider = Clock }), Ct);
             return new HttpPair(transport, connection, session);
         }
 
@@ -107,7 +113,7 @@ public sealed class Http11Tests
 
         await http.Session.WriteAsync(HttpResponse.Text(200, "hi"), Ct);
         Assert.Equal(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\n\r\nhi",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n" + DateField + "Content-Length: 2\r\n\r\nhi",
             await http.ReceiveResponseAsync());
     }
 
@@ -202,7 +208,9 @@ public sealed class Http11Tests
     [InlineData("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: +3\r\n\r\n", 400)]
     [InlineData("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 3, 3\r\n\r\n", 400)]
     [InlineData("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n", 501)]
-    [InlineData("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n", 501)]
+    [InlineData("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n", 400)]
+    [InlineData("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked, gzip\r\n\r\n", 400)]
+    [InlineData("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\nTransfer-Encoding: chunked\r\n\r\n", 501)]
     [InlineData("POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n", 400)]
     [InlineData("GET / HTTP/1.1\r\nHost: x\r\nX-Folded: a\r\n b\r\n\r\n", 400)]
     [InlineData("GET / HTTP/1.1\r\nHost : x\r\n\r\n", 400)]
@@ -301,7 +309,7 @@ public sealed class Http11Tests
         await http.Session.WriteAsync(HttpResponse.FromStream(200, new MemoryStream("hello"u8.ToArray()), null, "text/plain"), Ct);
 
         Assert.Equal(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n" + DateField + "Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
             await http.ReceiveResponseAsync());
     }
 
@@ -315,7 +323,7 @@ public sealed class Http11Tests
         await Assert.ThrowsAsync<ProtocolStateException>(() => http.Session.WriteAsync(HttpResponse.Text(204, "x"), Ct).AsTask());
         await http.Session.WriteAsync(HttpResponse.Status(204), Ct);
 
-        Assert.Equal("HTTP/1.1 204 No Content\r\n\r\n", await http.ReceiveAsync(text => text.EndsWith("\r\n\r\n", StringComparison.Ordinal)));
+        Assert.Equal("HTTP/1.1 204 No Content\r\n" + DateField + "\r\n", await http.ReceiveAsync(text => text.EndsWith("\r\n\r\n", StringComparison.Ordinal)));
     }
 
     // A CR or LF in a header value would let the application inject a second response.
@@ -421,7 +429,7 @@ public sealed class Http11Tests
         await input.Writer.FlushAsync();
 
         HttpResponse response = HttpResponse.Text(200, "hello");
-        byte[] responseBytes = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 5\r\n\r\nhello");
+        byte[] responseBytes = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n" + DateField + "Content-Length: 5\r\n\r\nhello");
         await using Connection connection = Connection.FromPipe(new Duplex(input.Reader, output.Writer));
         Session<HttpRequest, HttpResponse> session = await connection.OpenAsync(Http11.Server(), Ct);
 

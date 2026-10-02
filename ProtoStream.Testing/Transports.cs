@@ -27,9 +27,21 @@ public sealed class TransportPair
 public static class InMemoryTransport
 {
     /// <summary>Creates two cross-wired pipes: what the client writes, the server reads, and the other way round.</summary>
-    public static TransportPair CreatePair()
+    /// <remarks>
+    /// The pipes pause their writer at <see cref="DefaultPauseThreshold"/>, above the largest message the built-in
+    /// protocols buffer by default. A pause threshold below a protocol's buffer limit deadlocks: the writer waits
+    /// for the reader to consume, the reader waits for the rest of the message.
+    /// </remarks>
+    public static TransportPair CreatePair() => CreatePair(new PipeOptions(
+        pauseWriterThreshold: DefaultPauseThreshold, resumeWriterThreshold: DefaultPauseThreshold / 2, useSynchronizationContext: false));
+
+    /// <summary>Unconsumed bytes at which the default pipes pause their writer: 16 MiB.</summary>
+    public const long DefaultPauseThreshold = 16 * 1024 * 1024;
+
+    /// <summary>Creates two cross-wired pipes with the given options, for example to test backpressure.</summary>
+    public static TransportPair CreatePair(PipeOptions options)
     {
-        var options = new PipeOptions(useSynchronizationContext: false);
+        ArgumentNullException.ThrowIfNull(options);
         var toServer = new Pipe(options);
         var toClient = new Pipe(options);
         return new TransportPair(new DuplexPipe(toClient.Reader, toServer.Writer), new DuplexPipe(toServer.Reader, toClient.Writer));

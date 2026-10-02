@@ -21,6 +21,17 @@ public interface IPayloadDecoder
     void OnConsumed(long dataBytes);
 }
 
+/// <summary>
+/// Implemented by a payload decoder whose peer waits for permission before sending the payload, such as an HTTP
+/// client that sent <c>Expect: 100-continue</c>. The session sends the preamble the first time the application
+/// reads the payload, and never when it does not.
+/// </summary>
+public interface IPayloadPreamble
+{
+    /// <summary>Returns the bytes to send once; later calls return false.</summary>
+    bool TryTakePreamble(out ReadOnlyMemory<byte> preamble);
+}
+
 /// <summary>One step of payload decoding. See <see cref="IPayloadDecoder"/>.</summary>
 public readonly struct PayloadStep
 {

@@ -20,6 +20,9 @@ internal interface IPayloadHost
 
     /// <summary>Records a violation, closes the session by its policy and returns the exception to throw.</summary>
     Exception PayloadViolation(ViolationCode code, string detail);
+
+    /// <summary>Writes raw bytes to the peer under the connection's write lock, before the payload is read.</summary>
+    ValueTask WritePreambleAsync(ReadOnlyMemory<byte> preamble, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -60,6 +63,8 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
     {
         if (_decoder is null || _completedByUser)
             throw new InvalidOperationException("The payload can no longer be read: its message is over or reading was completed.");
+        if (_decoder is IPayloadPreamble waiting && waiting.TryTakePreamble(out ReadOnlyMemory<byte> preamble))
+            await host.WritePreambleAsync(preamble, cancellationToken).ConfigureAwait(false);
         return await ReadCoreAsync(cancellationToken).ConfigureAwait(false);
     }
 

@@ -76,6 +76,11 @@ public sealed class Connection : IAsyncDisposable
     }
 
     /// <summary>A connection over pipes a host already has, such as a socket transport.</summary>
+    /// <remarks>
+    /// A message is buffered until it is complete, so the input pipe's pause threshold must be larger than the
+    /// protocol's <see cref="ProtocolLimits.MaxBufferedBytes"/>. A smaller threshold deadlocks on large messages: the
+    /// transport stops writing until bytes are consumed, and the session cannot consume an incomplete message.
+    /// </remarks>
     public static Connection FromPipe(IDuplexPipe pipe) => FromPipe(pipe, ConnectionOptions.Default);
 
     /// <summary>A connection over pipes a host already has, with the given options.</summary>
