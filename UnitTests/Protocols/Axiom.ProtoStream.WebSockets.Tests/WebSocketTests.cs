@@ -219,6 +219,27 @@ public sealed class WebSocketTests
         Assert.Equal("Hello", Encoding.ASCII.GetString(Assert.IsType<WsPing>(runner.Decode(new ReadOnlySequence<byte>(ping), true).Message).Data.Span));
     }
 
+    // Section 5.3: the client masks every frame with a fresh key from a strong source, so a page cannot steer
+    // the bytes an intermediary sees. Two identical messages must therefore differ on the wire.
+    [Fact]
+    public void TheClientMasksEveryFrameWithAFreshKey()
+    {
+        using var client = new CodecRunner<WsMessage, WsMessage>(WebSocket.Client());
+        using var server = new CodecRunner<WsMessage, WsMessage>(WebSocket.Server());
+        var first = new ArrayBufferWriter<byte>();
+        var second = new ArrayBufferWriter<byte>();
+
+        client.Encode(WsMessage.CreateText("Hello"), first);
+        client.Encode(WsMessage.CreateText("Hello"), second);
+
+        Assert.Equal(0x80, first.WrittenSpan[1] & 0x80);
+        Assert.Equal(0x80, second.WrittenSpan[1] & 0x80);
+        Assert.NotEqual(first.WrittenSpan[2..6].ToArray(), second.WrittenSpan[2..6].ToArray());
+        Assert.NotEqual(first.WrittenSpan.ToArray(), second.WrittenSpan.ToArray());
+        Assert.Equal("Hello", Assert.IsType<WsText>(server.Decode(new ReadOnlySequence<byte>(first.WrittenMemory), true).Message).Text);
+        Assert.Equal("Hello", Assert.IsType<WsText>(server.Decode(new ReadOnlySequence<byte>(second.WrittenMemory), true).Message).Text);
+    }
+
     // Control frames may be injected between the fragments of a message (section 5.4).
     [Fact]
     public async Task APingBetweenFragmentsIsAnsweredWhileTheMessageAssembles()

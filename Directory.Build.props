@@ -44,6 +44,11 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <!--
+      Pack fails when the net8.0 and net10.0 builds expose different APIs. Once 0.1.0 is on nuget.org, set
+      PackageValidationBaselineVersion so pack also fails on a breaking change against the shipped release.
+    -->
+    <EnablePackageValidation>true</EnablePackageValidation>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(IsLibrary)' != 'true'">
