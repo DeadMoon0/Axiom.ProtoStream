@@ -5,10 +5,10 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using ProtoStream;
-using ProtoStream.Errors;
-using ProtoStream.Http;
-using ProtoStream.WebSockets;
+using Axiom.ProtoStream;
+using Axiom.ProtoStream.Errors;
+using Axiom.ProtoStream.Http;
+using Axiom.ProtoStream.WebSockets;
 
 namespace WebSocketEcho;
 

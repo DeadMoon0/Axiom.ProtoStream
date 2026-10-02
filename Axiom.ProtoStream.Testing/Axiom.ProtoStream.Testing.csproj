@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Description>Part of the Axiom family. Test harnesses for Axiom.ProtoStream protocol authors: codec round-trips across every segment boundary, seeded mutation fuzzing with a hang watchdog, definition lint assertions, pooled-message reset checks and in-memory transports. Test-framework agnostic.</Description>
+    <PackageTags>Axiom;ProtoStream;protocol;pipelines;testing;fuzzing;codec</PackageTags>
+    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Axiom.ProtoStream\Axiom.ProtoStream.csproj" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+  </ItemGroup>
+
+</Project>

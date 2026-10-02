@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Description>Part of the Axiom family. Describe a network protocol once (framing, messages, state machine, limits, lifecycle) and run it over any Stream or IDuplexPipe. Built on System.IO.Pipelines: zero-copy parsing, allocation-free steady state, protocol switching, typed sessions consumed with await foreach.</Description>
+    <PackageTags>Axiom;ProtoStream;protocol;pipelines;networking;framing;codec;state-machine;binary;tcp</PackageTags>
+    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- In-box from net10.0 on; a package reference there is pruned and warns. -->
+    <PackageReference Include="System.IO.Pipelines" Condition="'$(TargetFramework)' == 'net8.0'" />
+  </ItemGroup>
+
+</Project>

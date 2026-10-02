@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Description>Part of the Axiom family. RFC 6455 WebSockets for Axiom.ProtoStream: server and client roles with fragmentation, control frames, incremental UTF-8 validation and the close handshake, plus the HTTP/1.1 upgrade from an Axiom.ProtoStream.Http session.</Description>
+    <PackageTags>Axiom;ProtoStream;protocol;pipelines;websocket;rfc6455;networking</PackageTags>
+    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Axiom.ProtoStream.Http\Axiom.ProtoStream.Http.csproj" />
+  </ItemGroup>
+
+</Project>

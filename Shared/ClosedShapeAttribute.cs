@@ -1,6 +1,6 @@
 using System;
 
-namespace ProtoStream;
+namespace Axiom.ProtoStream;
 
 /// <summary>
 /// Marks a public positional record (or record struct) whose shape is deliberately closed.

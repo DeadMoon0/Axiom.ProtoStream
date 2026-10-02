@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Description>Part of the Axiom family. The HTTP/1.1 server role for Axiom.ProtoStream (RFC 9110, RFC 9112, RFC 3986 targets): zero-copy request heads, streamed bodies, keep-alive, pipelining, 100-continue, upgrades and CONNECT, refusing everything the RFCs call ambiguous.</Description>
+    <PackageTags>Axiom;ProtoStream;protocol;pipelines;http;http1;server;networking</PackageTags>
+    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Axiom.ProtoStream\Axiom.ProtoStream.csproj" />
+  </ItemGroup>
+
+</Project>

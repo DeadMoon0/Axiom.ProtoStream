@@ -5,10 +5,14 @@
     per project, and never behind a '$(Configuration)|$(Platform)' condition: a guarded
     TreatWarningsAsErrors quietly lets every other configuration build with warnings.
 
-    Projects that are not shipped libraries (tests, benchmarks, samples) live in folders whose own
-    Directory.Build.props sets IsLibrary=false before importing this file.
+    Layout: the core and the testing harness at the top, protocol implementations under Protocols/.
+    Every project has its own test project (<Project>.Tests) under UnitTests/, mirroring that layout;
+    fixtures shared by all test projects live in UnitTests/Shared. Benchmarks and samples set
+    IsLibrary=false in their folder's Directory.Build.props.
   -->
   <PropertyGroup>
+    <IsTestProject Condition="$(MSBuildProjectName.EndsWith('.Tests'))">true</IsTestProject>
+    <IsLibrary Condition="'$(IsLibrary)' == '' and '$(IsTestProject)' == 'true'">false</IsLibrary>
     <IsLibrary Condition="'$(IsLibrary)' == ''">true</IsLibrary>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <ImplicitUsings>disable</ImplicitUsings>
@@ -23,7 +27,7 @@
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
-  <!-- Shipped libraries: documented, trimmable, AOT-safe, packed with symbols and SourceLink. -->
+  <!-- Shipped libraries: part of the Axiom family, documented, trimmable, AOT-safe, packed with symbols and SourceLink. -->
   <PropertyGroup Condition="'$(IsLibrary)' == 'true'">
     <IsPackable>true</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -49,9 +53,20 @@
   <ItemGroup Condition="'$(IsLibrary)' == 'true'">
     <!-- Each package ships its own README next to its csproj. -->
     <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="\" Condition="Exists('$(MSBuildProjectDirectory)/README.md')" />
-    <!-- Marker attribute the PublicSurfaceCanGrow convention test reads; compiled into every library. -->
+    <!-- Marker attribute the PublicSurface convention test reads; compiled into every library. -->
     <Compile Include="$(MSBuildThisFileDirectory)Shared/ClosedShapeAttribute.cs" Link="Shared/ClosedShapeAttribute.cs" />
-    <InternalsVisibleTo Include="ProtoStream.Tests" />
+    <!-- Internals are open to the package's own test project only. -->
+    <InternalsVisibleTo Include="$(MSBuildProjectName).Tests" />
+  </ItemGroup>
+
+  <!-- Test projects: xunit, the shared fixtures (a toy protocol, conventions) and the testing harness. -->
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+    <Using Include="Xunit" />
+    <Compile Include="$(MSBuildThisFileDirectory)UnitTests/Shared/*.cs" LinkBase="Shared" />
   </ItemGroup>
 
 </Project>

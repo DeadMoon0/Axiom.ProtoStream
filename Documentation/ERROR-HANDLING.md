@@ -10,7 +10,7 @@ Every exception ProtoStream throws (apart from argument checks) derives from `Pr
 | `ProtocolStateException` | calling code | A write the state does not allow, an invalid response, a second concurrent read, writing after close. | Unchanged; nothing was sent. | Fix the calling code. |
 | `ProtocolSwitchedException` | calling code | Using a session after `SwitchAsync`. | `Switched`. | Use the session `SwitchAsync` returned. |
 | `StaleMessageException` | calling code | Using a pooled message after the next read. | Unchanged. | Finish with a message before reading on, or `Retain()` it. |
-| `CodecContractException` | codec author | A codec threw, consumed nothing, reported positions outside its input, or two outcomes. | `Faulted`. | Fix the codec; `ProtoStream.Testing` finds most of these. |
+| `CodecContractException` | codec author | A codec threw, consumed nothing, reported positions outside its input, or two outcomes. | `Faulted`. | Fix the codec; `Axiom.ProtoStream.Testing` finds most of these. |
 | `TransportException` | transport | The stream failed or the peer stopped reading. Inner exception is the stream's error. | `Faulted`. | Dispose the connection. |
 
 `OperationCanceledException` from a cancelled read leaves the session usable: nothing was consumed. A
@@ -19,4 +19,4 @@ cancelled write that was streaming a payload faults the session, because part of
 ## Observing errors
 
 `ConnectionOptions.Observer` receives violations (including skipped ones), faults, switches and closes for
-every session of a connection. The `ProtoStream` meter counts sessions, messages and violations by code.
+every session of a connection. The `Axiom.ProtoStream` meter counts sessions, messages and violations by code.

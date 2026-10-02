@@ -31,10 +31,10 @@ jobs:
             10.0.x
 
       - name: Restore
-        run: dotnet restore ProtoStream.slnx
+        run: dotnet restore Axiom.ProtoStream.slnx
 
       - name: Build
-        run: dotnet build ProtoStream.slnx --configuration Release --no-restore
+        run: dotnet build Axiom.ProtoStream.slnx --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test UnitTests/ProtoStream.Tests/ProtoStream.Tests.csproj --configuration Release --no-build --logger "trx"
+        run: dotnet test Axiom.ProtoStream.slnx --configuration Release --no-build --logger "trx"

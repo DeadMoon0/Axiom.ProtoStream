@@ -1,0 +1,22 @@
+<Solution>
+  <Project Path="Axiom.ProtoStream/Axiom.ProtoStream.csproj" />
+  <Project Path="Axiom.ProtoStream.Testing/Axiom.ProtoStream.Testing.csproj" />
+  <Folder Name="/Protocols/">
+    <Project Path="Protocols/Axiom.ProtoStream.Http/Axiom.ProtoStream.Http.csproj" />
+    <Project Path="Protocols/Axiom.ProtoStream.WebSockets/Axiom.ProtoStream.WebSockets.csproj" />
+  </Folder>
+  <Folder Name="/UnitTests/">
+    <Project Path="UnitTests/Axiom.ProtoStream.Tests/Axiom.ProtoStream.Tests.csproj" />
+    <Project Path="UnitTests/Axiom.ProtoStream.Testing.Tests/Axiom.ProtoStream.Testing.Tests.csproj" />
+  </Folder>
+  <Folder Name="/UnitTests/Protocols/">
+    <Project Path="UnitTests/Protocols/Axiom.ProtoStream.Http.Tests/Axiom.ProtoStream.Http.Tests.csproj" />
+    <Project Path="UnitTests/Protocols/Axiom.ProtoStream.WebSockets.Tests/Axiom.ProtoStream.WebSockets.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Benchmarks/">
+    <Project Path="Benchmarks/Axiom.ProtoStream.Benchmarks/Axiom.ProtoStream.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/Samples/">
+    <Project Path="Samples/WebSocketEcho/WebSocketEcho.csproj" />
+  </Folder>
+</Solution>

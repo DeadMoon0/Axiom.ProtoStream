@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Protocols\Axiom.ProtoStream.Http\Axiom.ProtoStream.Http.csproj" />
+    <ProjectReference Include="..\..\..\Axiom.ProtoStream.Testing\Axiom.ProtoStream.Testing.csproj" />
+  </ItemGroup>
+
+</Project>

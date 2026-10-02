@@ -1,7 +1,7 @@
 # Spec compliance
 
 Every MUST-level requirement of the specifications below that applies to the implemented roles, how
-ProtoStream meets it, and the test that proves it. Test names refer to `UnitTests/ProtoStream.Tests`.
+ProtoStream meets it, and the test that proves it. Tests live in the matching project under `UnitTests/`.
 
 Scope: the HTTP/1.1 **server** role (RFC 9110, RFC 9112), request targets and Host fields against the URI
 grammar (RFC 3986), and WebSockets (RFC 6455) in server and client role. Where an RFC allows a choice

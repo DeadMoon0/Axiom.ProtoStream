@@ -4,12 +4,23 @@ Describe a network protocol once — framing, messages, state machine, limits, l
 over any `Stream` or `IDuplexPipe`. The framework drives the connection; your code sees only the messages
 the protocol hands to it.
 
+ProtoStream is part of the [Axiom](https://github.com/DeadMoon0/Axiom) family; its packages and namespaces
+are `Axiom.ProtoStream*`.
+
+```
+Axiom.ProtoStream/            core
+Axiom.ProtoStream.Testing/    test harnesses for protocol authors
+Protocols/                    protocol implementations (Http, WebSockets)
+UnitTests/                    one test project per project, same layout
+Benchmarks/, Samples/
+```
+
 | Package | What it is |
 |---|---|
-| `ProtoStream` | Core: describer, framing, `Wire` serialization, connections, sessions, protocol switching. |
-| `ProtoStream.Http` | HTTP/1.1 server role (RFC 9110, 9112): zero-copy request heads, streamed bodies, keep-alive, pipelining, upgrades, CONNECT. |
-| `ProtoStream.WebSockets` | WebSockets (RFC 6455) and the HTTP upgrade into them. |
-| `ProtoStream.Testing` | Harnesses for protocol authors: round-trips at every split, fuzzing, lint assertions, in-memory transports. |
+| `Axiom.ProtoStream` | Core: describer, framing, `Wire` serialization, connections, sessions, protocol switching. |
+| `Axiom.ProtoStream.Http` | HTTP/1.1 server role (RFC 9110, 9112): zero-copy request heads, streamed bodies, keep-alive, pipelining, upgrades, CONNECT. |
+| `Axiom.ProtoStream.WebSockets` | WebSockets (RFC 6455) and the HTTP upgrade into them. |
+| `Axiom.ProtoStream.Testing` | Harnesses for protocol authors: round-trips at every split, fuzzing, lint assertions, in-memory transports. |
 
 Targets .NET 8 and .NET 10. Trimming and Native AOT compatible. No dependencies beyond `System.IO.Pipelines`.
 

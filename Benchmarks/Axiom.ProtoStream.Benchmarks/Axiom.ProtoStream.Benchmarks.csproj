@@ -3,11 +3,13 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFrameworks>net10.0</TargetFrameworks>
-    <RootNamespace>WebSocketEcho</RootNamespace>
-    <!-- Builds with the AOT and trim analyzers on; `dotnet publish -r <rid>` produces a native executable. -->
-    <PublishAot>true</PublishAot>
+    <RootNamespace>Axiom.ProtoStream.Benchmarks</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\Protocols\Axiom.ProtoStream.WebSockets\Axiom.ProtoStream.WebSockets.csproj" />
