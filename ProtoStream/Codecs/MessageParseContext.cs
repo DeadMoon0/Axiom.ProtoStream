@@ -29,6 +29,7 @@ public ref struct MessageParseContext
     internal bool HasResumeAt;
     internal ViolationCode Code;
     internal string? Detail;
+    internal int? ProtocolErrorCode;
 
     internal MessageParseContext(ParseHost host, ReadOnlySequence<byte> input, bool isCompleted)
     {
@@ -42,6 +43,7 @@ public ref struct MessageParseContext
         HasResumeAt = false;
         Code = default;
         Detail = null;
+        ProtocolErrorCode = null;
     }
 
     /// <summary>The unconsumed bytes received so far.</summary>
@@ -114,6 +116,19 @@ public ref struct MessageParseContext
         SetOutcome(ParseResultKind.Invalid);
         Code = code;
         Detail = detail;
+        return new ParseResult(ParseResultKind.Invalid);
+    }
+
+    /// <summary>
+    /// The input violates the protocol and the reader cannot continue; <paramref name="protocolErrorCode"/> is the
+    /// protocol's own code for it (an HTTP status, a WebSocket close code), available to violation replies.
+    /// </summary>
+    public ParseResult Invalid(ViolationCode code, int protocolErrorCode, string detail)
+    {
+        SetOutcome(ParseResultKind.Invalid);
+        Code = code;
+        Detail = detail;
+        ProtocolErrorCode = protocolErrorCode;
         return new ParseResult(ParseResultKind.Invalid);
     }
 

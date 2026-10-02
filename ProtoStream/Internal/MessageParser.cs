@@ -30,6 +30,8 @@ internal readonly struct ParseOutcome
 
     public string? Detail { get; init; }
 
+    public int? ProtocolErrorCode { get; init; }
+
     public bool HasResumeAt { get; init; }
 
     public SequencePosition ResumeAt { get; init; }
@@ -59,11 +61,13 @@ internal sealed class MessageParser(int maxBufferedBytes, PayloadReader? payload
         return _scratch.WrittenMemory;
     }
 
+    /// <summary>The decoder of the payload the last parse claimed, for runners outside a session.</summary>
+    public IPayloadDecoder? LastPayloadDecoder { get; private set; }
+
     public override PipeReader StartPayload(IPayloadDecoder decoder)
     {
-        if (payload is null)
-            throw new CodecContractException("This session does not support payloads.");
-        return payload.Start(decoder);
+        LastPayloadDecoder = decoder;
+        return payload is null ? DetachedPayload.Instance : payload.Start(decoder);
     }
 
     public ParseOutcome Parse<TIn>(IMessageReader<TIn> reader, in ReadOnlySequence<byte> input, bool isCompleted, out TIn message)
@@ -122,6 +126,7 @@ internal sealed class MessageParser(int maxBufferedBytes, PayloadReader? payload
                     Kind = ParseOutcomeKind.Invalid,
                     Code = context.Code,
                     Detail = context.Detail,
+                    ProtocolErrorCode = context.ProtocolErrorCode,
                     HasResumeAt = context.HasResumeAt,
                     ResumeAt = context.ResumeAt,
                 };
@@ -129,6 +134,27 @@ internal sealed class MessageParser(int maxBufferedBytes, PayloadReader? payload
     }
 
     public void Dispose() => _scratch.Dispose();
+
+    /// <summary>The body of a message decoded outside a session; its bytes are in the runner's outcome instead.</summary>
+    private sealed class DetachedPayload : PipeReader
+    {
+        public static readonly DetachedPayload Instance = new();
+
+        public override void AdvanceTo(SequencePosition consumed) => throw NotInSession();
+
+        public override void AdvanceTo(SequencePosition consumed, SequencePosition examined) => throw NotInSession();
+
+        public override void CancelPendingRead() { }
+
+        public override void Complete(Exception? exception = null) { }
+
+        public override System.Threading.Tasks.ValueTask<ReadResult> ReadAsync(System.Threading.CancellationToken cancellationToken = default) => throw NotInSession();
+
+        public override bool TryRead(out ReadResult result) => throw NotInSession();
+
+        private static InvalidOperationException NotInSession() =>
+            new("This payload was decoded outside a session; read DecodeOutcome.Payload instead.");
+    }
 
     private static long LengthTo<TIn>(in ReadOnlySequence<byte> input, SequencePosition position, IMessageReader<TIn> reader)
     {

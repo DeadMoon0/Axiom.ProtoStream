@@ -364,7 +364,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
                         }
 
                         _input.AdvanceTo(buffer.End);
-                        throw await ViolateAsync(outcome.Code, outcome.Detail ?? "The input violates the protocol.").ConfigureAwait(false);
+                        throw await ViolateAsync(outcome.Code, outcome.Detail ?? "The input violates the protocol.", outcome.ProtocolErrorCode).ConfigureAwait(false);
 
                     default:
                         if (outcome.Detached)
@@ -708,9 +708,9 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         return exception;
     }
 
-    private Violation CreateViolation(ViolationCode code, string detail)
+    private Violation CreateViolation(ViolationCode code, string detail, int? protocolErrorCode = null)
     {
-        var violation = new Violation { Code = code, Detail = detail, Protocol = Protocol, State = State };
+        var violation = new Violation { Code = code, Detail = detail, Protocol = Protocol, State = State, ProtocolErrorCode = protocolErrorCode };
         Metrics.AddViolation(Protocol, code);
         Notify(static (o, s, v) => o.OnViolation(s, ((ViolationHolder)v!).Violation), new ViolationHolder(violation));
         return violation;
@@ -723,9 +723,9 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         return new ProtocolViolationException(violation);
     }
 
-    private async ValueTask<Exception> ViolateAsync(ViolationCode code, string detail)
+    private async ValueTask<Exception> ViolateAsync(ViolationCode code, string detail, int? protocolErrorCode = null)
     {
-        Violation violation = CreateViolation(code, detail);
+        Violation violation = CreateViolation(code, detail, protocolErrorCode);
         if (_definition.ViolationReply is { } reply)
         {
             try

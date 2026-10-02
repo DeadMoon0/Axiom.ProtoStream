@@ -39,4 +39,10 @@ public sealed class Violation
 
     /// <summary>Name of the state the session was in.</summary>
     public required string State { get; init; }
+
+    /// <summary>
+    /// The protocol's own error code for the violation when the reader named one, such as HTTP 413 or
+    /// WebSocket close code 1009. Violation replies use it to answer precisely.
+    /// </summary>
+    public int? ProtocolErrorCode { get; init; }
 }

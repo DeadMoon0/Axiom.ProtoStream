@@ -27,8 +27,14 @@ public readonly struct DecodeOutcome<TIn>
     /// <summary>The message when <see cref="Status"/> is <see cref="DecodeStatus.Message"/>; valid until the next decode.</summary>
     public TIn? Message { get; init; }
 
-    /// <summary>Where the message ended, or the bytes the reader took ownership of while needing more.</summary>
+    /// <summary>Where the message ended (after its payload), or the bytes the reader took ownership of while needing more.</summary>
     public SequencePosition Consumed { get; init; }
+
+    /// <summary>The decoded payload of the message, when it claimed one; empty otherwise.</summary>
+    public ReadOnlyMemory<byte> Payload { get; init; }
+
+    /// <summary>The protocol's own error code for an invalid input, when the reader named one.</summary>
+    public int? ProtocolErrorCode { get; init; }
 
     /// <summary>The violation category when <see cref="Status"/> is <see cref="DecodeStatus.Invalid"/>.</summary>
     public ViolationCode Code { get; init; }
@@ -45,7 +51,8 @@ public readonly struct DecodeOutcome<TIn>
 
 /// <summary>
 /// Runs a definition's codec over bytes outside any connection: for parsing captured traffic or files,
-/// and for codec tests. Enforces the same reader contract as a session. Payloads are not supported.
+/// and for codec tests. Enforces the same reader contract as a session. A payload a message claims is decoded
+/// from the same input and returned in <see cref="DecodeOutcome{TIn}.Payload"/>.
 /// </summary>
 public sealed class CodecRunner<TIn, TOut> : IDisposable
     where TIn : class
@@ -67,6 +74,9 @@ public sealed class CodecRunner<TIn, TOut> : IDisposable
     {
         _parser.Generation.Advance();
         ParseOutcome outcome = _parser.Parse(_codec, input, isCompleted, out TIn message);
+        if (outcome.Kind == ParseOutcomeKind.Message && outcome.HasPayload)
+            return DecodePayload(input, isCompleted, outcome.Consumed, message);
+
         return outcome.Kind switch
         {
             ParseOutcomeKind.Message => new DecodeOutcome<TIn> { Status = DecodeStatus.Message, Message = message, Consumed = outcome.Consumed },
@@ -76,11 +86,49 @@ public sealed class CodecRunner<TIn, TOut> : IDisposable
                 Status = DecodeStatus.Invalid,
                 Code = outcome.Code,
                 Detail = outcome.Detail,
+                ProtocolErrorCode = outcome.ProtocolErrorCode,
                 CanResume = outcome.HasResumeAt,
                 ResumeAt = outcome.ResumeAt,
                 Consumed = input.Start,
             },
         };
+    }
+
+    private DecodeOutcome<TIn> DecodePayload(in ReadOnlySequence<byte> input, bool isCompleted, SequencePosition headEnd, TIn message)
+    {
+        IPayloadDecoder decoder = _parser.LastPayloadDecoder!;
+        var payload = new ArrayBufferWriter<byte>();
+        ReadOnlySequence<byte> rest = input.Slice(headEnd);
+        while (true)
+        {
+            PayloadStep step = decoder.Next(rest, isCompleted);
+            switch (step.Kind)
+            {
+                case PayloadStepKind.Data when step.Length > 0:
+                    foreach (ReadOnlyMemory<byte> segment in rest.Slice(step.Skip, step.Length))
+                        payload.Write(segment.Span);
+                    decoder.OnConsumed(step.Length);
+                    rest = rest.Slice(step.Skip + step.Length);
+                    continue;
+
+                case PayloadStepKind.End:
+                    return new DecodeOutcome<TIn>
+                    {
+                        Status = DecodeStatus.Message,
+                        Message = message,
+                        Consumed = rest.GetPosition(step.Skip),
+                        Payload = payload.WrittenMemory,
+                    };
+
+                case PayloadStepKind.Invalid:
+                    return new DecodeOutcome<TIn> { Status = DecodeStatus.Invalid, Code = step.Code, Detail = step.Detail, Consumed = input.Start };
+
+                default:
+                    if (isCompleted)
+                        return new DecodeOutcome<TIn> { Status = DecodeStatus.Invalid, Code = ViolationCode.Truncated, Detail = "The input ends inside a payload.", Consumed = input.Start };
+                    return new DecodeOutcome<TIn> { Status = DecodeStatus.NeedMore, Consumed = input.Start };
+            }
+        }
     }
 
     /// <summary>Encodes <paramref name="message"/> into <paramref name="output"/>.</summary>
