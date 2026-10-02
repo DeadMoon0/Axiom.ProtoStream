@@ -24,6 +24,7 @@ public sealed class PublicSurfaceTests
     {
         var offenders = PublicMembers(assemblyName)
             .OfType<MethodBase>()
+            .Where(m => !IsOverride(m))
             .Where(m => m.GetParameters().Any(p => p.IsOptional))
             .Select(m => $"{m.DeclaringType}.{m.Name}")
             .ToList();
@@ -46,6 +47,11 @@ public sealed class PublicSurfaceTests
 
         Assert.True(offenders.Count == 0, "Positional records without [ClosedShape]: " + string.Join(", ", offenders));
     }
+
+    // An override inherits its signature from the base class (PipeReader.ReadAsync has an optional token);
+    // the rule is about signatures this library chooses.
+    private static bool IsOverride(MethodBase method) =>
+        method is MethodInfo info && info.GetBaseDefinition().DeclaringType != info.DeclaringType;
 
     // Records are recognised by the compiler-generated EqualityContract (classes) or PrintMembers (structs).
     private static bool IsRecord(Type t) =>

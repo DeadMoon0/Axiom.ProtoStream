@@ -7,9 +7,12 @@ namespace ProtoStream.Codecs;
 /// after the next read reused its memory.
 /// </summary>
 /// <remarks>
-/// Codecs that hand out reused message objects store the stamp from
+/// <para>Codecs that hand out reused message objects store the stamp from
 /// <see cref="MessageParseContext.Stamp"/> and call <see cref="ThrowIfStale"/> in every accessor.
-/// The default value belongs to no session and is always current: use it for owned messages.
+/// The default value belongs to no session and is always current: use it for owned messages.</para>
+/// <para>A stamp is refreshed when its object is refilled, so the check only catches a message used after the
+/// next read if that read did not reuse the same object. Codecs therefore rotate two instances per message
+/// kind: keeping the previous message while handling the next one, the common mistake, is then always caught.</para>
 /// </remarks>
 public readonly struct MessageStamp
 {

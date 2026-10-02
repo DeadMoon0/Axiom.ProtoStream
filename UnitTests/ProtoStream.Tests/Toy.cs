@@ -101,6 +101,7 @@ public static class Toy
         .States(s => s
             .Start("Open")
             .In("Open")
+                .On<Hello>().Delegate()
                 .On<Data>().Delegate()
                 .On<Ping>().Delegate()
                 .On<Pong>().Delegate()
