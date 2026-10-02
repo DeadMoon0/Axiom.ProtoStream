@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ProtoStream.Http</RootNamespace>
+    <PackageId>ProtoStream.Http</PackageId>
+    <Version>0.1.0</Version>
+    <Description>HTTP/1.1 for ProtoStream: a hardened, zero-copy server codec with streamed bodies, keep-alive, pipelining and protocol upgrade (101 Switching Protocols).</Description>
+    <PackageTags>protocol;pipelines;http;http1;server;networking</PackageTags>
+    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProtoStream\ProtoStream.csproj" />
+  </ItemGroup>
+
+</Project>

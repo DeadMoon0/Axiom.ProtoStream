@@ -1,0 +1,57 @@
+<Project>
+
+  <!--
+    One place for the settings every project in this repo shares. Nothing below may be repeated
+    per project, and never behind a '$(Configuration)|$(Platform)' condition: a guarded
+    TreatWarningsAsErrors quietly lets every other configuration build with warnings.
+
+    Projects that are not shipped libraries (tests, benchmarks, samples) live in folders whose own
+    Directory.Build.props sets IsLibrary=false before importing this file.
+  -->
+  <PropertyGroup>
+    <IsLibrary Condition="'$(IsLibrary)' == ''">true</IsLibrary>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <!-- Shipped libraries: documented, trimmable, AOT-safe, packed with symbols and SourceLink. -->
+  <PropertyGroup Condition="'$(IsLibrary)' == 'true'">
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsTrimmable>true</IsTrimmable>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <Authors>DeadMoon0</Authors>
+    <Copyright>Copyright (c) DeadMoon0 2026</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/DeadMoon0/ProtoStream</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/DeadMoon0/ProtoStream.git</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsLibrary)' != 'true'">
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsLibrary)' == 'true'">
+    <!-- Each package ships its own README next to its csproj. -->
+    <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="\" Condition="Exists('$(MSBuildProjectDirectory)/README.md')" />
+    <!-- Marker attribute the PublicSurfaceCanGrow convention test reads; compiled into every library. -->
+    <Compile Include="$(MSBuildThisFileDirectory)Shared/ClosedShapeAttribute.cs" Link="Shared/ClosedShapeAttribute.cs" />
+    <InternalsVisibleTo Include="ProtoStream.Tests" />
+  </ItemGroup>
+
+</Project>

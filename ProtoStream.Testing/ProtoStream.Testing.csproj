@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ProtoStream.Testing</RootNamespace>
+    <PackageId>ProtoStream.Testing</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Test harnesses for ProtoStream protocol authors: codec round-trips across every segment boundary, seeded mutation fuzzing with a hang watchdog, definition lint assertions, pooled-message reset checks and in-memory sessions. Test-framework agnostic.</Description>
+    <PackageTags>protocol;pipelines;testing;fuzzing;codec</PackageTags>
+    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProtoStream\ProtoStream.csproj" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+  </ItemGroup>
+
+</Project>

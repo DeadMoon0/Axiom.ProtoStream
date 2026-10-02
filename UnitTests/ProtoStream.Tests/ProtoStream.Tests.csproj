@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ProtoStream.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\ProtoStream\ProtoStream.csproj" />
+    <ProjectReference Include="..\..\ProtoStream.Http\ProtoStream.Http.csproj" />
+    <ProjectReference Include="..\..\ProtoStream.WebSockets\ProtoStream.WebSockets.csproj" />
+    <ProjectReference Include="..\..\ProtoStream.Testing\ProtoStream.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

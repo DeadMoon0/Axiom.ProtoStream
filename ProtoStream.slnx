@@ -1,4 +1,11 @@
 <Solution>
-  <Project Path="ProtoStream.Tests/ProtoStream.Tests.csproj" />
-  <Project Path="ProtoStream/ProtoStream.csproj" />
+  <Folder Name="/Packages/">
+    <Project Path="ProtoStream/ProtoStream.csproj" />
+    <Project Path="ProtoStream.Http/ProtoStream.Http.csproj" />
+    <Project Path="ProtoStream.WebSockets/ProtoStream.WebSockets.csproj" />
+    <Project Path="ProtoStream.Testing/ProtoStream.Testing.csproj" />
+  </Folder>
+  <Folder Name="/UnitTests/">
+    <Project Path="UnitTests/ProtoStream.Tests/ProtoStream.Tests.csproj" />
+  </Folder>
 </Solution>

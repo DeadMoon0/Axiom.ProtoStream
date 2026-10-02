@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ProtoStream.WebSockets</RootNamespace>
+    <PackageId>ProtoStream.WebSockets</PackageId>
+    <Version>0.1.0</Version>
+    <Description>RFC 6455 WebSockets for ProtoStream: frame codec with fragmentation, control frames, UTF-8 validation and close handshake, plus the HTTP/1.1 upgrade that switches a ProtoStream.Http session into a WebSocket session.</Description>
+    <PackageTags>protocol;pipelines;websocket;rfc6455;networking</PackageTags>
+    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ProtoStream.Http\ProtoStream.Http.csproj" />
+  </ItemGroup>
+
+</Project>
