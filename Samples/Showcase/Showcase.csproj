@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Showcase</RootNamespace>
+    <!-- Builds with the AOT and trim analyzers on; `dotnet publish -r <rid>` produces a native executable. -->
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Protocols\Axiom.ProtoStream.WebSockets\Axiom.ProtoStream.WebSockets.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The web app ships inside the executable: one file to run, nothing to deploy beside it. -->
+    <EmbeddedResource Include="wwwroot\*" LogicalName="wwwroot/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ProtoStream Live</title>
+  <meta name="description" content="A live showcase served entirely by Axiom.ProtoStream: HTTP/1.1 and WebSockets on one connection.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true">
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="orb orb-c"></div>
+    <div class="grid-lines"></div>
+  </div>
+
+  <header class="top">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 48 48" aria-hidden="true">
+        <defs>
+          <linearGradient id="logo-gradient" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="var(--accent-a)"/>
+            <stop offset="1" stop-color="var(--accent-b)"/>
+          </linearGradient>
+        </defs>
+        <path d="M6 16 L24 6 L42 16 L42 32 L24 42 L6 32 Z" fill="none" stroke="url(#logo-gradient)" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M14 22 H34 M14 28 H28" stroke="url(#logo-gradient)" stroke-width="3" stroke-linecap="round"/>
+        <circle class="logo-pulse" cx="34" cy="28" r="3" fill="var(--accent-b)"/>
+      </svg>
+      <div>
+        <h1>ProtoStream <span class="gradient-text">Live</span></h1>
+        <p class="tagline">One <code>Axiom.ProtoStream</code> server. HTTP/1.1 and WebSocket on the same connection. No ASP.NET, no Kestrel.</p>
+      </div>
+    </div>
+    <div class="status" id="status" data-state="connecting">
+      <span class="dot"></span>
+      <span id="status-text">Connecting…</span>
+      <span class="divider"></span>
+      <span id="online">0</span>&nbsp;online
+    </div>
+  </header>
+
+  <main class="cards">
+    <section class="card wide" id="canvas-card">
+      <header>
+        <div>
+          <h2>Shared canvas</h2>
+          <p>Every stroke is a 10-byte <strong>binary WebSocket frame</strong>, relayed to every open tab without a copy.</p>
+        </div>
+        <span class="badge">WS · binary</span>
+      </header>
+      <div class="toolbar">
+        <div class="swatches" id="swatches" role="radiogroup" aria-label="Brush colour"></div>
+        <label class="slider">Brush <input type="range" id="brush" min="2" max="24" value="6"></label>
+        <span class="stroke-count" id="stroke-count">0 strokes</span>
+        <button class="ghost" id="clear">Clear for everyone</button>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="canvas" aria-label="Shared drawing canvas"></canvas>
+        <p class="canvas-hint" id="canvas-hint">Draw here. Open a second tab to see it arrive live.</p>
+      </div>
+    </section>
+
+    <section class="card" id="pulse-card">
+      <header>
+        <div>
+          <h2>Server pulse</h2>
+          <p>Pushed every second over the socket, counted by the framework's own <code>Axiom.ProtoStream</code> meter.</p>
+        </div>
+        <span class="badge">WS · text</span>
+      </header>
+      <div class="tiles">
+        <div class="tile"><span class="value" id="t-online">–</span><span class="label">sockets online</span></div>
+        <div class="tile"><span class="value" id="t-http">–</span><span class="label">HTTP requests</span></div>
+        <div class="tile"><span class="value" id="t-in">–</span><span class="label">messages in</span></div>
+        <div class="tile"><span class="value" id="t-out">–</span><span class="label">messages out</span></div>
+        <div class="tile"><span class="value" id="t-violations">–</span><span class="label" title="Malformed input and peers that sent nothing in time, such as the spare connections browsers open">violations &amp; timeouts</span></div>
+        <div class="tile"><span class="value" id="t-memory">–</span><span class="label">managed heap</span></div>
+      </div>
+      <div class="spark-wrap">
+        <canvas id="spark" aria-label="Messages per second"></canvas>
+        <span class="spark-label">messages / second · <span id="uptime">0 s</span> up</span>
+      </div>
+    </section>
+
+    <section class="card" id="chat-card">
+      <header>
+        <div>
+          <h2>Chat</h2>
+          <p>Send over the WebSocket, or as an <strong>HTTP POST</strong> the server broadcasts to every socket.</p>
+        </div>
+        <div class="segmented" role="radiogroup" aria-label="Send chat via">
+          <button class="active" data-via="ws" role="radio" aria-checked="true">WebSocket</button>
+          <button data-via="post" role="radio" aria-checked="false">HTTP POST</button>
+        </div>
+      </header>
+      <ol class="messages" id="messages" aria-live="polite"></ol>
+      <form class="composer" id="composer">
+        <input id="name" maxlength="24" placeholder="Name" autocomplete="nickname">
+        <input id="text" maxlength="280" placeholder="Say something…" autocomplete="off" required>
+        <button class="primary" type="submit">Send</button>
+      </form>
+    </section>
+
+    <section class="card" id="latency-card">
+      <header>
+        <div>
+          <h2>Round trip</h2>
+          <p>Probes echoed by the server one after another: what a message costs end to end on this machine.</p>
+        </div>
+        <span class="badge">WS · echo</span>
+      </header>
+      <div class="latency-controls">
+        <button class="primary" id="probe">Send 200 probes</button>
+        <div class="latency-stats">
+          <div><span id="l-min">–</span><small>min</small></div>
+          <div><span id="l-avg">–</span><small>avg</small></div>
+          <div><span id="l-p95">–</span><small>p95</small></div>
+          <div><span id="l-max">–</span><small>max</small></div>
+        </div>
+      </div>
+      <div class="histogram" id="histogram" aria-label="Latency histogram"></div>
+    </section>
+
+    <section class="card" id="inspect-card">
+      <header>
+        <div>
+          <h2>Request inspector</h2>
+          <p>A <strong>GET</strong> answered with how ProtoStream parsed it: target form, path, query, authority, fields.</p>
+        </div>
+        <span class="badge">HTTP · GET</span>
+      </header>
+      <form class="inspect-form" id="inspect-form">
+        <span class="prefix">GET</span>
+        <input id="inspect-target" value="/api/inspect?city=Z%C3%BCrich&amp;tags=fast,safe" spellcheck="false">
+        <button class="primary" type="submit">Send</button>
+      </form>
+      <div class="inspect-result" id="inspect-result">
+        <p class="empty">Send the request to see its parsed head.</p>
+      </div>
+    </section>
+
+    <section class="card" id="upload-card">
+      <header>
+        <div>
+          <h2>Streamed upload</h2>
+          <p>A <strong>POST</strong> body hashed with SHA-256 straight from the socket. It is never held in memory.</p>
+        </div>
+        <span class="badge">HTTP · POST</span>
+      </header>
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="file" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-5 5m5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="drop-text">Drop a file or click to choose. Up to 256 MiB.</span>
+        <div class="progress" id="progress"><div class="bar" id="bar"></div></div>
+      </label>
+      <dl class="upload-result" id="upload-result"></dl>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>Served by <code>Axiom.ProtoStream</code> · <code>Axiom.ProtoStream.Http</code> · <code>Axiom.ProtoStream.WebSockets</code></span>
+    <span>Every byte above went through a protocol described once and enforced by the framework.</span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

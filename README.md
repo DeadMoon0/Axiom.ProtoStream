@@ -84,7 +84,12 @@ await foreach (HttpRequest request in http.Messages.WithCancellation(ct))
 }
 ```
 
-A complete server is in [Samples/WebSocketEcho](Samples/WebSocketEcho).
+Two complete servers:
+
+- [Samples/Showcase](Samples/Showcase): **ProtoStream Live**, a web app with pages, a JSON API (GET and POST),
+  streamed uploads, a shared canvas over binary WebSocket frames, chat, live telemetry and latency probes.
+- [Samples/WebSocketEcho](Samples/WebSocketEcho): the minimal HTTP-to-WebSocket echo used for the Autobahn
+  conformance run.
 
 ## Documentation
 

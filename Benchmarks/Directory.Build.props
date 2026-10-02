@@ -10,7 +10,8 @@
   <!-- Applications run on the latest runtime only. Set here rather than per project, so projects generated
        below this folder (BenchmarkDotNet builds one per run) target the same framework. -->
   <PropertyGroup>
-    <TargetFrameworks>net10.0</TargetFrameworks>
+    <TargetFrameworks></TargetFrameworks>
+    <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
 
 </Project>
