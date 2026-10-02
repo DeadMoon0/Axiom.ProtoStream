@@ -102,6 +102,14 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
     /// <summary>Bytes of the text being assembled already proven to be complete, valid UTF-8.</summary>
     private int _textValidated;
 
+    // The data frame whose payload is still arriving.
+    private readonly byte[] _frameMask = new byte[WsFrame.MaskKeySize];
+    private bool _inDataFrame;
+    private long _frameRemaining;
+    private bool _frameFin;
+    private bool _frameMasked;
+    private int _frameMaskOffset;
+
     public WsCodec(bool isServer, WebSocketOptions options)
     {
         _isServer = isServer;
@@ -115,13 +123,43 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
         message = null!;
         ReadOnlySequence<byte> input = context.Input;
         long offset = 0;
+        Span<byte> header = stackalloc byte[WsFrame.MaxHeaderSize];
         while (true)
         {
             ReadOnlySequence<byte> rest = input.Slice(offset);
+
+            // Data frame payloads are taken as they arrive: a large frame never has to sit in the connection
+            // buffer whole, and invalid UTF-8 fails at the byte that carries it (RFC 6455 section 8.1).
+            if (_inDataFrame)
+            {
+                long take = Math.Min(rest.Length, _frameRemaining);
+                if (take > 0)
+                {
+                    Unmask(rest.Slice(0, take), _frameMasked ? _frameMask : default, _message.Append((int)take), _frameMaskOffset);
+                    _frameMaskOffset += (int)take;
+                    _frameRemaining -= take;
+                    offset += take;
+                }
+
+                bool frameComplete = _frameRemaining == 0;
+                bool isText = _fragmentedOpcode == WsOpcode.Text;
+                if (isText && !IsValidTextSoFar(_message.Memory.Span, isFinal: frameComplete && _frameFin))
+                    return context.Invalid(ViolationCode.InvalidData, WsCloseCode.InvalidPayloadData, "A text message is not valid UTF-8.");
+                if (!frameComplete)
+                    return NeedMore(ref context, input, offset);
+
+                _inDataFrame = false;
+                if (!_frameFin)
+                    continue; // the fragment is copied; look for the next one in the same input
+
+                _fragmentedOpcode = null;
+                message = Complete(isText, context.Stamp);
+                return context.Done(input.GetPosition(offset));
+            }
+
             if (rest.Length < WsFrame.BaseHeaderSize)
                 return NeedMore(ref context, input, offset);
 
-            Span<byte> header = stackalloc byte[WsFrame.MaxHeaderSize];
             int available = (int)Math.Min(rest.Length, WsFrame.MaxHeaderSize);
             rest.Slice(0, available).CopyTo(header);
 
@@ -172,15 +210,19 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
             int maskOffset = headerSize;
             if (masked)
                 headerSize += WsFrame.MaskKeySize;
-            if (rest.Length < headerSize + length)
+            if (rest.Length < headerSize)
                 return NeedMore(ref context, input, offset);
 
             ReadOnlySpan<byte> mask = masked ? header.Slice(maskOffset, WsFrame.MaskKeySize) : default;
-            ReadOnlySequence<byte> payload = rest.Slice(headerSize, length);
-            long frameEnd = offset + headerSize + length;
 
+            // Control frames are at most 125 bytes and are handled whole.
             if (control)
-                return Control(ref context, opcode, payload, mask, input.GetPosition(frameEnd), out message);
+            {
+                if (rest.Length < headerSize + length)
+                    return NeedMore(ref context, input, offset);
+                long frameEnd = offset + headerSize + length;
+                return Control(ref context, opcode, rest.Slice(headerSize, length), mask, input.GetPosition(frameEnd), out message);
+            }
 
             if (opcode != WsOpcode.Continuation)
             {
@@ -189,36 +231,30 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
                 _textValidated = 0;
             }
 
-            Unmask(payload, mask, _message.Append((int)length));
-            bool isText = _fragmentedOpcode == WsOpcode.Text;
-
-            // Section 8.1: invalid UTF-8 fails the connection as soon as it is seen, not when the message ends.
-            if (isText && !IsValidTextSoFar(_message.Memory.Span, isFinal: fin))
-                return context.Invalid(ViolationCode.InvalidData, WsCloseCode.InvalidPayloadData, "A text message is not valid UTF-8.");
-
-            if (!fin)
-            {
-                offset = frameEnd;
-                continue; // the fragment is copied; look for the next one in the same input
-            }
-
-            _fragmentedOpcode = null;
-            ReadOnlyMemory<byte> data = _message.Memory;
-            if (isText)
-            {
-                WsText text = _texts[_next ^= 1];
-                text.Load(data, context.Stamp);
-                message = text;
-            }
-            else
-            {
-                WsBinary binary = _binaries[_next ^= 1];
-                binary.Load(data, context.Stamp);
-                message = binary;
-            }
-
-            return context.Done(input.GetPosition(frameEnd));
+            _inDataFrame = true;
+            _frameRemaining = length;
+            _frameFin = fin;
+            _frameMasked = masked;
+            _frameMaskOffset = 0;
+            if (masked)
+                mask.CopyTo(_frameMask);
+            offset += headerSize;
         }
+    }
+
+    private WsMessage Complete(bool isText, MessageStamp stamp)
+    {
+        ReadOnlyMemory<byte> data = _message.Memory;
+        if (isText)
+        {
+            WsText text = _texts[_next ^= 1];
+            text.Load(data, stamp);
+            return text;
+        }
+
+        WsBinary binary = _binaries[_next ^= 1];
+        binary.Load(data, stamp);
+        return binary;
     }
 
     public WriteResult Write(WsMessage message, IBufferWriter<byte> output)
@@ -303,7 +339,7 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
     {
         message = null!;
         Span<byte> data = _control.AsSpan(0, (int)payload.Length);
-        Unmask(payload, mask, data);
+        Unmask(payload, mask, data, maskOffset: 0);
         ReadOnlyMemory<byte> memory = _control.AsMemory(0, data.Length);
 
         switch (opcode)
@@ -405,7 +441,7 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
         output.Advance(headerSize + payload.Length);
     }
 
-    private static void Unmask(in ReadOnlySequence<byte> payload, ReadOnlySpan<byte> mask, Span<byte> destination)
+    private static void Unmask(in ReadOnlySequence<byte> payload, ReadOnlySpan<byte> mask, Span<byte> destination, int maskOffset)
     {
         if (mask.IsEmpty)
         {
@@ -418,9 +454,9 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
         foreach (ReadOnlyMemory<byte> segment in payload)
         {
             ReadOnlySpan<byte> source = segment.Span;
-            // The key continues where the previous segment stopped.
+            // The key continues where the previous segment, or the previous read of this frame, stopped.
             for (int i = 0; i < WsFrame.MaskKeySize; i++)
-                rotated[i] = mask[(written + i) % WsFrame.MaskKeySize];
+                rotated[i] = mask[(maskOffset + written + i) % WsFrame.MaskKeySize];
             Xor(source, rotated, destination.Slice(written, source.Length));
             written += source.Length;
         }

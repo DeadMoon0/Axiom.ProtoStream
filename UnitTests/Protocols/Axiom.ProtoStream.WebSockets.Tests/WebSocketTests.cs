@@ -287,6 +287,39 @@ public sealed class WebSocketTests
         Assert.Equal(WsCloseCode.InvalidPayloadData, ex.Violation.ProtocolErrorCode);
     }
 
+    // Autobahn 6.4.3/6.4.4: one text frame arrives in pieces; the invalid byte fails it before the frame is complete.
+    [Fact]
+    public async Task InvalidUtf8FailsInsideAFrameThatIsStillArriving()
+    {
+        await using WsPair ws = await WsPair.OpenAsync();
+        byte[] frame = ClientFrame(Fin | TextOpcode, [.. "valid"u8.ToArray(), 0xF4, 0x90, 0x80, 0x80, .. new byte[100]]);
+
+        await ws.SendAsync(frame[..14]); // header, key and the first bytes of the payload, including the invalid ones
+
+        var ex = await Assert.ThrowsAsync<ProtocolViolationException>(() => ws.Session.ReadAsync(Ct).AsTask());
+        Assert.Equal(WsCloseCode.InvalidPayloadData, ex.Violation.ProtocolErrorCode);
+    }
+
+    // A frame's payload is consumed as it arrives, so a pipe that pauses its writer early cannot deadlock it.
+    [Fact]
+    public async Task AFrameLargerThanThePipesPauseThresholdIsReceived()
+    {
+        TransportPair transport = InMemoryTransport.CreatePair(new PipeOptions(pauseWriterThreshold: 4096, resumeWriterThreshold: 2048, useSynchronizationContext: false));
+        await using Connection connection = Connection.FromPipe(transport.Server);
+        Session<WsMessage, WsMessage> session = await connection.OpenAsync(WebSocket.Server(), Ct);
+        byte[] payload = Enumerable.Range(0, 100_000).Select(i => (byte)i).ToArray();
+
+        Task send = transport.Client.Output.WriteAsync(ClientFrame(Fin | BinaryOpcode, payload)).AsTask();
+        WsBinary received = Assert.IsType<WsBinary>((await session.ReadAsync(Ct)).Message);
+        Assert.Equal(payload, received.Data.ToArray());
+
+        // The bytes of a delivered message are released by the next read, which lets the paused writer finish.
+        Task<ProtocolReadResult<WsMessage>> next = session.ReadAsync(Ct).AsTask();
+        await send;
+        await transport.Client.Output.CompleteAsync();
+        Assert.True((await next).IsCompleted);
+    }
+
     // A code point cut in half by a fragment boundary is valid once the next fragment completes it.
     [Fact]
     public async Task ACodePointSplitAcrossFragmentsIsValid()
