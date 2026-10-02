@@ -103,15 +103,15 @@ public sealed class ProtocolSwitch<TOut, TIn2, TOut2>
     where TIn2 : class
     where TOut2 : class
 {
-    internal ProtocolSwitch(TOut finalMessage, ProtocolDefinition<TIn2, TOut2> target, Func<System.IO.Stream, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>>? transport)
+    internal ProtocolSwitch(TOut? finalMessage, ProtocolDefinition<TIn2, TOut2> target, Func<System.IO.Stream, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>>? transport)
     {
         FinalMessage = finalMessage;
         Target = target;
         Transport = transport;
     }
 
-    /// <summary>The last message of the current protocol, such as <c>101 Switching Protocols</c>.</summary>
-    public TOut FinalMessage { get; }
+    /// <summary>The last message of the current protocol, such as <c>101 Switching Protocols</c>; null when the switch sends nothing.</summary>
+    public TOut? FinalMessage { get; }
 
     /// <summary>The protocol the connection continues with.</summary>
     public ProtocolDefinition<TIn2, TOut2> Target { get; }

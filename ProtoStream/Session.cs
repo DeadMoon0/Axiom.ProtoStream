@@ -137,6 +137,43 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     }
 
     /// <summary>
+    /// Ends this session without a final message and continues the connection with <paramref name="target"/>,
+    /// for prefix protocols such as the PROXY protocol header. Same rules as the other overload.
+    /// </summary>
+    public ValueTask<Session<TIn2, TOut2>> SwitchAsync<TIn2, TOut2>(ProtocolDefinition<TIn2, TOut2> target, CancellationToken cancellationToken)
+        where TIn2 : class
+        where TOut2 : class
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return SwitchAsync(new ProtocolSwitch<TOut, TIn2, TOut2>(null, target, null), cancellationToken);
+    }
+
+    /// <summary>Writes <paramref name="finalMessage"/>, then continues the connection with <paramref name="target"/>. Same rules as the other overloads.</summary>
+    public ValueTask<Session<TIn2, TOut2>> SwitchAsync<TIn2, TOut2>(TOut finalMessage, ProtocolDefinition<TIn2, TOut2> target, CancellationToken cancellationToken)
+        where TIn2 : class
+        where TOut2 : class
+    {
+        ArgumentNullException.ThrowIfNull(finalMessage);
+        ArgumentNullException.ThrowIfNull(target);
+        return SwitchAsync(new ProtocolSwitch<TOut, TIn2, TOut2>(finalMessage, target, null), cancellationToken);
+    }
+
+    /// <summary>
+    /// Writes <paramref name="finalMessage"/>, wraps the transport with <paramref name="transport"/> (for example
+    /// in an <c>SslStream</c> for STARTTLS), then continues with <paramref name="target"/>. Any byte the peer sent
+    /// after the switch point is a violation. Only for connections created from one duplex stream.
+    /// </summary>
+    public ValueTask<Session<TIn2, TOut2>> SwitchAsync<TIn2, TOut2>(TOut finalMessage, ProtocolDefinition<TIn2, TOut2> target, Func<Stream, CancellationToken, ValueTask<Stream>> transport, CancellationToken cancellationToken)
+        where TIn2 : class
+        where TOut2 : class
+    {
+        ArgumentNullException.ThrowIfNull(finalMessage);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(transport);
+        return SwitchAsync(new ProtocolSwitch<TOut, TIn2, TOut2>(finalMessage, target, transport), cancellationToken);
+    }
+
+    /// <summary>
     /// Writes <see cref="ProtocolSwitch{TOut, TIn2, TOut2}.FinalMessage"/>, ends this session and continues the
     /// connection with the target protocol. Bytes the peer already sent after the switch point go to the new
     /// session. Allowed only in states described as <c>Switchable</c> and while no read is in progress.
@@ -157,7 +194,8 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await WriteLockedAsync(protocolSwitch.FinalMessage, WriteMode.Automatic, cancellationToken).ConfigureAwait(false);
+                if (protocolSwitch.FinalMessage is { } finalMessage)
+                    await WriteLockedAsync(finalMessage, WriteMode.Automatic, cancellationToken).ConfigureAwait(false);
                 SetStatus(SessionStatus.Switched);
                 ReleaseResources();
             }
