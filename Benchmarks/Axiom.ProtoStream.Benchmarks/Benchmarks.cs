@@ -113,11 +113,87 @@ public class FramedReadBenchmarks
     }
 }
 
+/// <summary>
+/// End to end through a session: every message is read, dispatched and answered, the answer encoded and flushed
+/// (into a sink). This is what one connection costs per request or per echoed WebSocket message.
+/// </summary>
+[MemoryDiagnoser]
+public class SessionRoundTripBenchmarks
+{
+    private const int Messages = 1_000;
+    private const int CloseCodeNormal = 1000;
+
+    private byte[] _requests = [];
+    private byte[] _frames = [];
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var requests = new ArrayBufferWriter<byte>();
+        for (int i = 0; i < Messages; i++)
+            requests.Write(ParseBenchmarks.BrowserRequest);
+        _requests = requests.WrittenSpan.ToArray();
+
+        // Masked with an all-zero key, so the payload bytes stay readable; the close frame ends the session cleanly.
+        var frames = new ArrayBufferWriter<byte>();
+        byte[] text = [0x81, 0x85, 0, 0, 0, 0, .. "Hello"u8];
+        for (int i = 0; i < Messages; i++)
+            frames.Write(text);
+        frames.Write<byte>([0x88, 0x82, 0, 0, 0, 0, CloseCodeNormal >> 8, CloseCodeNormal & 0xFF]);
+        _frames = frames.WrittenSpan.ToArray();
+    }
+
+    [Benchmark(OperationsPerInvoke = Messages)]
+    public async Task<int> HttpPipelinedKeepAlive()
+    {
+        await using Connection connection = await OpenAsync(_requests);
+        Session<HttpRequest, HttpResponse> http = await connection.OpenAsync(Http11.Server(), CancellationToken.None);
+        int answered = 0;
+        await foreach (HttpRequest request in http.Messages)
+        {
+            await http.WriteAsync(HttpResponse.Text(HttpStatus.Ok, "hello"), CancellationToken.None);
+            answered++;
+        }
+
+        return answered;
+    }
+
+    [Benchmark(OperationsPerInvoke = Messages)]
+    public async Task<int> WebSocketEcho()
+    {
+        await using Connection connection = await OpenAsync(_frames);
+        Session<WsMessage, WsMessage> ws = await connection.OpenAsync(WebSocket.Server(), CancellationToken.None);
+        int echoed = 0;
+        await foreach (WsMessage message in ws.Messages)
+        {
+            await ws.WriteAsync(message, CancellationToken.None);
+            echoed++;
+        }
+
+        return echoed;
+    }
+
+    private static async Task<Connection> OpenAsync(byte[] input)
+    {
+        var pipe = new Pipe(new PipeOptions(pauseWriterThreshold: 0, resumeWriterThreshold: 0));
+        await pipe.Writer.WriteAsync(input);
+        await pipe.Writer.CompleteAsync();
+        return Connection.FromPipe(new Duplex(pipe.Reader, PipeWriter.Create(System.IO.Stream.Null)));
+    }
+
+    private sealed class Duplex(PipeReader input, PipeWriter output) : IDuplexPipe
+    {
+        public PipeReader Input { get; } = input;
+
+        public PipeWriter Output { get; } = output;
+    }
+}
+
 /// <summary>Parsing alone: a typical browser request head, and a masked WebSocket text frame.</summary>
 [MemoryDiagnoser]
 public class ParseBenchmarks
 {
-    private static readonly byte[] BrowserRequest = Encoding.ASCII.GetBytes(
+    internal static readonly byte[] BrowserRequest = Encoding.ASCII.GetBytes(
         "GET /index.html?lang=en HTTP/1.1\r\nHost: example.org\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n" +
         "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\nAccept-Language: en-US,en;q=0.5\r\n" +
         "Accept-Encoding: gzip, deflate, br\r\nConnection: keep-alive\r\nUpgrade-Insecure-Requests: 1\r\n\r\n");
