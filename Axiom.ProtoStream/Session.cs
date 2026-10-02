@@ -63,8 +63,10 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     private int _readInFlight;
     private int _released;
     private bool _firstMessageSeen;
-    private bool _hasPendingAdvance;
-    private SequencePosition _pendingConsumed;
+    private ReadOnlySequence<byte> _buffer;
+    private bool _bufferCompleted;
+    private bool _hasBuffer;
+    private bool _timerArmed;
     private MessageEnumerable? _messages;
 
     internal Session(Connection connection, ProtocolDefinition<TIn, TOut> definition)
@@ -122,7 +124,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             if (Status != SessionStatus.Open)
                 return default;
 
-            await ReleasePreviousMessageAsync(cancellationToken).ConfigureAwait(false);
+            await ReleasePreviousMessageAsync(releaseInput: false, cancellationToken).ConfigureAwait(false);
             _parser.Generation.Advance();
             return await ReadNextMessageAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -196,7 +198,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             if (!_states[Volatile.Read(ref _state)].IsSwitchable)
                 throw new ProtocolStateException($"The '{Protocol}' session cannot switch protocols in state '{State}'.");
 
-            await ReleasePreviousMessageAsync(cancellationToken).ConfigureAwait(false);
+            await ReleasePreviousMessageAsync(releaseInput: true, cancellationToken).ConfigureAwait(false);
             await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
             try
             {
@@ -300,40 +302,61 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             throw new ProtocolStateException("Another read is already in progress on this session.") { Guidance = "Read from one loop only; writing is allowed from anywhere." };
     }
 
-    private async ValueTask ReleasePreviousMessageAsync(CancellationToken cancellationToken)
+    private async ValueTask ReleasePreviousMessageAsync(bool releaseInput, CancellationToken cancellationToken)
     {
-        AdvancePending();
+        if (releaseInput)
+            ReleaseBuffer();
         await _payload.DrainAsync(_limits.MaxPayloadDrain, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Hands the input back to the pipe before something else reads it (a switch, a payload): everything parsed so
+    /// far is consumed, and nothing beyond is marked examined, so the next reader sees the remaining bytes at once.
+    /// </summary>
+    private void ReleaseBuffer()
+    {
+        if (_hasBuffer)
+        {
+            _hasBuffer = false;
+            _input.AdvanceTo(_buffer.Start);
+        }
     }
 
     private async ValueTask<ProtocolReadResult<TIn>> ReadNextMessageAsync(CancellationToken cancellationToken)
     {
-        _timer.Arm(_firstMessageSeen ? _limits.IdleTimeout : _limits.FirstMessageTimeout);
         try
         {
             while (true)
             {
-                ReadResult read;
-                try
+                // Messages are parsed from the bytes of the last pipe read until more are needed. Pipelined
+                // messages then cost no pipe operations, and a delivered message stays valid: the pipe is advanced
+                // past it only when the session reads from the pipe again.
+                if (!_hasBuffer || (_buffer.IsEmpty && !_bufferCompleted))
                 {
-                    read = await _input.ReadAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
-                {
-                    throw Fault(new TransportException("Reading from the connection failed.", ex));
+                    if (_hasBuffer)
+                    {
+                        _hasBuffer = false;
+                        _input.AdvanceTo(_buffer.Start, _buffer.End);
+                    }
+
+                    ReadResult read = await ReadInputAsync(cancellationToken).ConfigureAwait(false);
+                    if (read.IsCanceled)
+                    {
+                        _input.AdvanceTo(read.Buffer.Start);
+                        if (_timerArmed && _timer.Fired)
+                            throw await ViolateAsync(ViolationCode.Timeout, _firstMessageSeen ? "No complete message arrived within the idle timeout." : "No complete first message arrived in time.").ConfigureAwait(false);
+                        continue; // a cancellation left behind by a timer that fired after an earlier read completed
+                    }
+
+                    _buffer = read.Buffer;
+                    _bufferCompleted = read.IsCompleted;
+                    _hasBuffer = true;
                 }
 
-                if (read.IsCanceled)
+                ReadOnlySequence<byte> buffer = _buffer;
+                if (buffer.IsEmpty && _bufferCompleted)
                 {
-                    _input.AdvanceTo(read.Buffer.Start);
-                    if (_timer.Fired)
-                        throw await ViolateAsync(ViolationCode.Timeout, _firstMessageSeen ? "No complete message arrived within the idle timeout." : "No complete first message arrived in time.").ConfigureAwait(false);
-                    continue; // a cancellation left behind by a timer that fired after the previous read completed
-                }
-
-                ReadOnlySequence<byte> buffer = read.Buffer;
-                if (buffer.IsEmpty && read.IsCompleted)
-                {
+                    _hasBuffer = false;
                     _input.AdvanceTo(buffer.End);
                     SetStatus(SessionStatus.Closed);
                     return default;
@@ -343,10 +366,11 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
                 TIn message;
                 try
                 {
-                    outcome = _parser.Parse(CurrentReader(), buffer, read.IsCompleted, out message);
+                    outcome = _parser.Parse(CurrentReader(), buffer, _bufferCompleted, out message);
                 }
                 catch (CodecContractException ex)
                 {
+                    _hasBuffer = false;
                     _input.AdvanceTo(buffer.Start, buffer.End);
                     throw Fault(ex);
                 }
@@ -354,8 +378,9 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
                 switch (outcome.Kind)
                 {
                     case ParseOutcomeKind.NeedMore:
+                        _hasBuffer = false;
                         _input.AdvanceTo(outcome.Consumed, buffer.End);
-                        if (read.IsCompleted)
+                        if (_bufferCompleted)
                             throw await ViolateAsync(ViolationCode.Truncated, "The connection closed in the middle of a message.").ConfigureAwait(false);
                         if (buffer.Slice(outcome.Consumed).Length >= _limits.MaxBufferedBytes)
                             throw await ViolateAsync(ViolationCode.LimitExceeded, $"A message did not complete within {_limits.MaxBufferedBytes} buffered bytes.").ConfigureAwait(false);
@@ -364,23 +389,25 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
                     case ParseOutcomeKind.Invalid:
                         if (outcome.HasResumeAt && _definition.ViolationAction == ViolationAction.Skip)
                         {
-                            _input.AdvanceTo(outcome.ResumeAt);
+                            _buffer = buffer.Slice(outcome.ResumeAt);
                             ReportSkipped(outcome.Code, outcome.Detail ?? "An invalid message was skipped.");
                             continue;
                         }
 
+                        _hasBuffer = false;
                         _input.AdvanceTo(buffer.End);
                         throw await ViolateAsync(outcome.Code, outcome.Detail ?? "The input violates the protocol.", outcome.ProtocolErrorCode).ConfigureAwait(false);
 
                     default:
                         if (outcome.Detached)
                         {
+                            // The message lives in session memory and may claim a payload that reads the pipe directly.
+                            _hasBuffer = false;
                             _input.AdvanceTo(outcome.Consumed);
                         }
                         else
                         {
-                            _pendingConsumed = outcome.Consumed;
-                            _hasPendingAdvance = true;
+                            _buffer = buffer.Slice(outcome.Consumed);
                         }
 
                         _firstMessageSeen = true;
@@ -391,13 +418,45 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
                             return default;
 
                         // Handled by the framework; the next message gets its own time window.
-                        _timer.Arm(_limits.IdleTimeout);
+                        DisarmTimer();
                         continue;
                 }
             }
         }
         finally
         {
+            DisarmTimer();
+        }
+    }
+
+    /// <summary>
+    /// Reads from the pipe. The timeout is armed only when the read actually waits, once per message: buffered
+    /// messages cost no timer operations, and a peer trickling bytes cannot restart the clock.
+    /// </summary>
+    private async ValueTask<ReadResult> ReadInputAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            ValueTask<ReadResult> pending = _input.ReadAsync(cancellationToken);
+            if (!pending.IsCompleted && !_timerArmed)
+            {
+                _timer.Arm(_firstMessageSeen ? _limits.IdleTimeout : _limits.FirstMessageTimeout);
+                _timerArmed = true;
+            }
+
+            return await pending.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            throw Fault(new TransportException("Reading from the connection failed.", ex));
+        }
+    }
+
+    private void DisarmTimer()
+    {
+        if (_timerArmed)
+        {
+            _timerArmed = false;
             _timer.Disarm();
         }
     }
@@ -409,7 +468,6 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         int typeId = _definition.InboundTypes.Find(message.GetType());
         if (typeId < 0 || !state.Inbound[typeId].IsDefined)
         {
-            AdvancePending();
             string detail = $"{message.GetType().Name} is not accepted in state '{state.Name}'.";
             if (_definition.ViolationAction == ViolationAction.Skip)
             {
@@ -439,14 +497,12 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
                     throw Fault(ex);
                 }
 
-                AdvancePending();
                 if (!TakeBudget())
                     throw await ViolateAsync(ViolationCode.LimitExceeded, "The peer triggered more automatic replies than the budget allows.").ConfigureAwait(false);
                 await WriteMessageAsync(reply, WriteMode.Automatic, cancellationToken).ConfigureAwait(false);
                 break;
 
             default:
-                AdvancePending();
                 break;
         }
 
@@ -479,15 +535,6 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     {
         int index = _states[Volatile.Read(ref _state)].ReaderIndex;
         return index < 0 ? _codec : _stateReaders[index];
-    }
-
-    private void AdvancePending()
-    {
-        if (_hasPendingAdvance)
-        {
-            _hasPendingAdvance = false;
-            _input.AdvanceTo(_pendingConsumed);
-        }
     }
 
     private bool TakeBudget()
