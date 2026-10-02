@@ -9,6 +9,9 @@ namespace ProtoStream.Definition;
 /// <summary>Validates a description, lints it and compiles it into lookup tables.</summary>
 internal static class DefinitionCompiler
 {
+    /// <summary>Room for a frame header on top of the largest frame content: more than any built-in framer needs.</summary>
+    private const int FrameHeaderAllowance = 64;
+
     public static ProtocolDefinition<TIn, TOut> Compile<TIn, TOut>(ProtocolBuilder<TIn, TOut> builder, ProtocolBuildOptions options)
         where TIn : class
         where TOut : class
@@ -77,7 +80,7 @@ internal static class DefinitionCompiler
                 warnings.Add($"A heartbeat every {builder.HeartbeatInterval.TotalMilliseconds} ms floods the peer.");
         }
 
-        if (builder.Framer is { } framer && limits.MaxBufferedBytes < (long)framer.MaxFrameSize + 64)
+        if (builder.Framer is { } framer && limits.MaxBufferedBytes < (long)framer.MaxFrameSize + FrameHeaderAllowance)
             errors.Add($"MaxBufferedBytes ({limits.MaxBufferedBytes}) cannot hold a frame of the maximum size ({framer.MaxFrameSize}) plus its header.");
 
         if (options.WarningsAsErrors)

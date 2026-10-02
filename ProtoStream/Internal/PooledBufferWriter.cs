@@ -10,6 +10,9 @@ namespace ProtoStream.Internal;
 /// </summary>
 internal sealed class PooledBufferWriter(int maxCapacity) : IBufferWriter<byte>, IDisposable
 {
+    private const int InitialCapacity = 256;
+    private const int GrowthFactor = 2;
+
     private byte[] _buffer = [];
     private int _written;
 
@@ -56,7 +59,7 @@ internal sealed class PooledBufferWriter(int maxCapacity) : IBufferWriter<byte>,
         if (needed > maxCapacity)
             throw new ProtocolStateException($"A message of more than {maxCapacity} bytes exceeds the limit of the protocol.");
 
-        int size = (int)Math.Min(Math.Max((long)_buffer.Length * 2, Math.Max(needed, 256)), Math.Max(maxCapacity, needed));
+        int size = (int)Math.Min(Math.Max((long)_buffer.Length * GrowthFactor, Math.Max(needed, InitialCapacity)), Math.Max(maxCapacity, needed));
         byte[] next = ArrayPool<byte>.Shared.Rent(size);
         _buffer.AsSpan(0, _written).CopyTo(next);
         if (_buffer.Length > 0)

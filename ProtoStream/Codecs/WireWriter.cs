@@ -37,52 +37,52 @@ public readonly ref struct WireWriter
     public void Boolean(bool value) => UInt8(value ? (byte)1 : (byte)0);
 
     /// <summary>Two bytes, most significant first.</summary>
-    public void UInt16BigEndian(ushort value) { BinaryPrimitives.WriteUInt16BigEndian(_output.GetSpan(2), value); _output.Advance(2); }
+    public void UInt16BigEndian(ushort value) { BinaryPrimitives.WriteUInt16BigEndian(_output.GetSpan(sizeof(ushort)), value); _output.Advance(sizeof(ushort)); }
 
     /// <summary>Two bytes, least significant first.</summary>
-    public void UInt16LittleEndian(ushort value) { BinaryPrimitives.WriteUInt16LittleEndian(_output.GetSpan(2), value); _output.Advance(2); }
+    public void UInt16LittleEndian(ushort value) { BinaryPrimitives.WriteUInt16LittleEndian(_output.GetSpan(sizeof(ushort)), value); _output.Advance(sizeof(ushort)); }
 
     /// <summary>Two bytes, most significant first.</summary>
-    public void Int16BigEndian(short value) { BinaryPrimitives.WriteInt16BigEndian(_output.GetSpan(2), value); _output.Advance(2); }
+    public void Int16BigEndian(short value) { BinaryPrimitives.WriteInt16BigEndian(_output.GetSpan(sizeof(ushort)), value); _output.Advance(sizeof(ushort)); }
 
     /// <summary>Two bytes, least significant first.</summary>
-    public void Int16LittleEndian(short value) { BinaryPrimitives.WriteInt16LittleEndian(_output.GetSpan(2), value); _output.Advance(2); }
+    public void Int16LittleEndian(short value) { BinaryPrimitives.WriteInt16LittleEndian(_output.GetSpan(sizeof(ushort)), value); _output.Advance(sizeof(ushort)); }
 
     /// <summary>Four bytes, most significant first.</summary>
-    public void UInt32BigEndian(uint value) { BinaryPrimitives.WriteUInt32BigEndian(_output.GetSpan(4), value); _output.Advance(4); }
+    public void UInt32BigEndian(uint value) { BinaryPrimitives.WriteUInt32BigEndian(_output.GetSpan(sizeof(uint)), value); _output.Advance(sizeof(uint)); }
 
     /// <summary>Four bytes, least significant first.</summary>
-    public void UInt32LittleEndian(uint value) { BinaryPrimitives.WriteUInt32LittleEndian(_output.GetSpan(4), value); _output.Advance(4); }
+    public void UInt32LittleEndian(uint value) { BinaryPrimitives.WriteUInt32LittleEndian(_output.GetSpan(sizeof(uint)), value); _output.Advance(sizeof(uint)); }
 
     /// <summary>Four bytes, most significant first.</summary>
-    public void Int32BigEndian(int value) { BinaryPrimitives.WriteInt32BigEndian(_output.GetSpan(4), value); _output.Advance(4); }
+    public void Int32BigEndian(int value) { BinaryPrimitives.WriteInt32BigEndian(_output.GetSpan(sizeof(uint)), value); _output.Advance(sizeof(uint)); }
 
     /// <summary>Four bytes, least significant first.</summary>
-    public void Int32LittleEndian(int value) { BinaryPrimitives.WriteInt32LittleEndian(_output.GetSpan(4), value); _output.Advance(4); }
+    public void Int32LittleEndian(int value) { BinaryPrimitives.WriteInt32LittleEndian(_output.GetSpan(sizeof(uint)), value); _output.Advance(sizeof(uint)); }
 
     /// <summary>Eight bytes, most significant first.</summary>
-    public void UInt64BigEndian(ulong value) { BinaryPrimitives.WriteUInt64BigEndian(_output.GetSpan(8), value); _output.Advance(8); }
+    public void UInt64BigEndian(ulong value) { BinaryPrimitives.WriteUInt64BigEndian(_output.GetSpan(sizeof(ulong)), value); _output.Advance(sizeof(ulong)); }
 
     /// <summary>Eight bytes, least significant first.</summary>
-    public void UInt64LittleEndian(ulong value) { BinaryPrimitives.WriteUInt64LittleEndian(_output.GetSpan(8), value); _output.Advance(8); }
+    public void UInt64LittleEndian(ulong value) { BinaryPrimitives.WriteUInt64LittleEndian(_output.GetSpan(sizeof(ulong)), value); _output.Advance(sizeof(ulong)); }
 
     /// <summary>Eight bytes, most significant first.</summary>
-    public void Int64BigEndian(long value) { BinaryPrimitives.WriteInt64BigEndian(_output.GetSpan(8), value); _output.Advance(8); }
+    public void Int64BigEndian(long value) { BinaryPrimitives.WriteInt64BigEndian(_output.GetSpan(sizeof(ulong)), value); _output.Advance(sizeof(ulong)); }
 
     /// <summary>Eight bytes, least significant first.</summary>
-    public void Int64LittleEndian(long value) { BinaryPrimitives.WriteInt64LittleEndian(_output.GetSpan(8), value); _output.Advance(8); }
+    public void Int64LittleEndian(long value) { BinaryPrimitives.WriteInt64LittleEndian(_output.GetSpan(sizeof(ulong)), value); _output.Advance(sizeof(ulong)); }
 
     /// <summary>IEEE 754 single precision, most significant byte first.</summary>
-    public void SingleBigEndian(float value) { BinaryPrimitives.WriteSingleBigEndian(_output.GetSpan(4), value); _output.Advance(4); }
+    public void SingleBigEndian(float value) { BinaryPrimitives.WriteSingleBigEndian(_output.GetSpan(sizeof(float)), value); _output.Advance(sizeof(float)); }
 
     /// <summary>IEEE 754 double precision, most significant byte first.</summary>
-    public void DoubleBigEndian(double value) { BinaryPrimitives.WriteDoubleBigEndian(_output.GetSpan(8), value); _output.Advance(8); }
+    public void DoubleBigEndian(double value) { BinaryPrimitives.WriteDoubleBigEndian(_output.GetSpan(sizeof(double)), value); _output.Advance(sizeof(double)); }
 
     /// <summary>A 16-byte GUID in RFC 9562 (big-endian) byte order.</summary>
     public void GuidBigEndian(Guid value)
     {
-        value.TryWriteBytes(_output.GetSpan(16), bigEndian: true, out _);
-        _output.Advance(16);
+        value.TryWriteBytes(_output.GetSpan(Leb128.GuidSize), bigEndian: true, out _);
+        _output.Advance(Leb128.GuidSize);
     }
 
     /// <summary>Unsigned LEB128.</summary>
@@ -91,12 +91,12 @@ public readonly ref struct WireWriter
     /// <summary>Unsigned LEB128.</summary>
     public void VarUInt64(ulong value)
     {
-        Span<byte> span = _output.GetSpan(10);
+        Span<byte> span = _output.GetSpan(Leb128.MaxBytes64);
         int i = 0;
-        while (value >= 0x80)
+        while (value >= Leb128.ContinuationBit)
         {
-            span[i++] = (byte)(value | 0x80);
-            value >>= 7;
+            span[i++] = (byte)(value | Leb128.ContinuationBit);
+            value >>= Leb128.PayloadBits;
         }
 
         span[i++] = (byte)value;

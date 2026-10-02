@@ -8,6 +8,7 @@ namespace ProtoStream.WebSockets.Internal;
 internal sealed class GrowableBuffer(int maxLength) : IDisposable
 {
     private const int InitialLength = 256;
+    private const int GrowthFactor = 2;
 
     private byte[] _array = [];
 
@@ -25,7 +26,7 @@ internal sealed class GrowableBuffer(int maxLength) : IDisposable
             throw new ProtocolStateException($"A message of more than {maxLength} bytes exceeds the limit.");
         if (needed > _array.Length)
         {
-            byte[] next = ArrayPool<byte>.Shared.Rent(Math.Max(needed, Math.Max(InitialLength, _array.Length * 2)));
+            byte[] next = ArrayPool<byte>.Shared.Rent(Math.Max(needed, Math.Max(InitialLength, _array.Length * GrowthFactor)));
             _array.AsSpan(0, Length).CopyTo(next);
             if (_array.Length > 0)
                 ArrayPool<byte>.Shared.Return(_array);

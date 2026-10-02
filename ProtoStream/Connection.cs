@@ -189,7 +189,7 @@ public sealed class Connection : IAsyncDisposable
     private static IDuplexPipe CreatePipe(Stream input, Stream output, ConnectionOptions options)
     {
         MemoryPool<byte> pool = options.Pool ?? MemoryPool<byte>.Shared;
-        var reader = PipeReader.Create(input, new StreamPipeReaderOptions(pool, bufferSize: options.MinimumReadSize, minimumReadSize: Math.Max(256, options.MinimumReadSize / 4), leaveOpen: true, useZeroByteReads: true));
+        var reader = PipeReader.Create(input, new StreamPipeReaderOptions(pool: pool, bufferSize: options.MinimumReadSize, leaveOpen: true, useZeroByteReads: true));
         var writer = PipeWriter.Create(output, new StreamPipeWriterOptions(pool, minimumBufferSize: options.MinimumReadSize, leaveOpen: true));
         return new DuplexPipe(reader, writer);
     }

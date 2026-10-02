@@ -214,6 +214,11 @@ internal sealed class HeaderDeclaredLengthFramer(int lengthOffset, LengthPrefix 
 internal sealed class ContentLengthHeaderFramer(int maxFrameSize) : IFramer
 {
     private const int MaxHeaderSize = 8 * 1024;
+
+    /// <summary>Digits of the largest frame length, an <see cref="int"/>.</summary>
+    private const int MaxInt32Digits = 10;
+
+    private static ReadOnlySpan<byte> LineEnd => "\r\n"u8;
     private static ReadOnlySpan<byte> HeaderEnd => "\r\n\r\n"u8;
 
     public int MaxFrameSize => maxFrameSize;
@@ -248,7 +253,7 @@ internal sealed class ContentLengthHeaderFramer(int maxFrameSize) : IFramer
             throw new ProtocolStateException($"A frame of {encoded.Length} bytes exceeds the maximum of {maxFrameSize}.");
 
         output.Write("Content-Length: "u8);
-        Span<byte> digits = output.GetSpan(11);
+        Span<byte> digits = output.GetSpan(MaxInt32Digits);
         Utf8Formatter.TryFormat(encoded.Length, digits, out int written);
         output.Advance(written);
         output.Write(HeaderEnd);
@@ -270,9 +275,9 @@ internal sealed class ContentLengthHeaderFramer(int maxFrameSize) : IFramer
             long length = -1;
             while (!span.IsEmpty)
             {
-                int end = span.IndexOf("\r\n"u8);
+                int end = span.IndexOf(LineEnd);
                 ReadOnlySpan<byte> line = end < 0 ? span : span[..end];
-                span = end < 0 ? default : span[(end + 2)..];
+                span = end < 0 ? default : span[(end + LineEnd.Length)..];
 
                 int colon = line.IndexOf((byte)':');
                 if (colon <= 0)
@@ -282,7 +287,7 @@ internal sealed class ContentLengthHeaderFramer(int maxFrameSize) : IFramer
 
                 ReadOnlySpan<byte> value = line[(colon + 1)..].Trim((byte)' ');
                 // Digits only: no sign, no inner whitespace, no hex, nothing a lenient parser would accept.
-                if (length >= 0 || value.IsEmpty || value.Length > 10 || value.IndexOfAnyExceptInRange((byte)'0', (byte)'9') >= 0
+                if (length >= 0 || value.IsEmpty || value.Length > MaxInt32Digits || value.IndexOfAnyExceptInRange((byte)'0', (byte)'9') >= 0
                     || !Utf8Parser.TryParse(value, out long parsed, out int used) || used != value.Length)
                     return -1;
                 length = parsed;

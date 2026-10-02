@@ -102,6 +102,9 @@ public sealed class HttpRequest
     private int _hostField;
     private bool _expectsContinue;
 
+    /// <summary>Header storage doubles when full.</summary>
+    private const int HeaderGrowthFactor = 2;
+
     /// <summary>Marks an absent part of the target.</summary>
     private const int Absent = -1;
 
@@ -263,7 +266,7 @@ public sealed class HttpRequest
     internal void AddHeader(HeaderEntry entry)
     {
         if (_headerCount == _headers.Length)
-            Array.Resize(ref _headers, _headers.Length * 2);
+            Array.Resize(ref _headers, _headers.Length * HeaderGrowthFactor);
         _headers[_headerCount++] = entry;
     }
 

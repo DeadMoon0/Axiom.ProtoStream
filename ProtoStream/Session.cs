@@ -30,6 +30,12 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     where TOut : class
 {
     private const int MaxOutboundMessageBytes = 64 * 1024 * 1024;
+
+    /// <summary>How often per heartbeat interval the session checks whether it has been quiet; a heartbeat is at most half an interval late.</summary>
+    private const int HeartbeatChecksPerInterval = 2;
+
+    /// <summary>Size of the pooled buffer a streamed payload is copied through.</summary>
+    private const int PayloadCopyBufferSize = 16 * 1024;
     private static readonly TimeSpan BudgetWindow = TimeSpan.FromSeconds(1);
 
     private readonly Connection _connection;
@@ -277,7 +283,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
 
         if (_definition.HeartbeatMessage is not null)
         {
-            TimeSpan period = _definition.HeartbeatInterval / 2;
+            TimeSpan period = _definition.HeartbeatInterval / HeartbeatChecksPerInterval;
             _heartbeat = _time.CreateTimer(static state => ((Session<TIn, TOut>)state!).OnHeartbeat(), this, period, period);
         }
     }
@@ -613,7 +619,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
 
     private async ValueTask StreamPayloadAsync(WriteResult result, CancellationToken cancellationToken)
     {
-        byte[] buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(PayloadCopyBufferSize);
         try
         {
             long total = 0;

@@ -33,10 +33,13 @@ public static class InMemoryTransport
     /// for the reader to consume, the reader waits for the rest of the message.
     /// </remarks>
     public static TransportPair CreatePair() => CreatePair(new PipeOptions(
-        pauseWriterThreshold: DefaultPauseThreshold, resumeWriterThreshold: DefaultPauseThreshold / 2, useSynchronizationContext: false));
+        pauseWriterThreshold: DefaultPauseThreshold, resumeWriterThreshold: DefaultResumeThreshold, useSynchronizationContext: false));
 
     /// <summary>Unconsumed bytes at which the default pipes pause their writer: 16 MiB.</summary>
     public const long DefaultPauseThreshold = 16 * 1024 * 1024;
+
+    /// <summary>Unconsumed bytes at which a paused writer of the default pipes resumes: 8 MiB.</summary>
+    public const long DefaultResumeThreshold = 8 * 1024 * 1024;
 
     /// <summary>Creates two cross-wired pipes with the given options, for example to test backpressure.</summary>
     public static TransportPair CreatePair(PipeOptions options)

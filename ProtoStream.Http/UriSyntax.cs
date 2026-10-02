@@ -18,6 +18,9 @@ internal static class UriSyntax
     /// <summary>Length of a percent-encoded octet: "%" HEXDIG HEXDIG.</summary>
     public const int PercentEncodedLength = 3;
 
+    /// <summary>The two brackets around an IP literal.</summary>
+    private const int Brackets = 2;
+
     /// <summary>Longest textual IPv6 address, including an embedded IPv4 part.</summary>
     public const int MaxIpv6Length = 45;
 
@@ -69,7 +72,7 @@ internal static class UriSyntax
     public static bool IsHost(ReadOnlySpan<byte> host)
     {
         if (!host.IsEmpty && host[0] == OpenBracket)
-            return host.Length > 2 && host[^1] == CloseBracket && IsIpLiteral(host[1..^1]);
+            return host.Length > Brackets && host[^1] == CloseBracket && IsIpLiteral(host[1..^1]);
         return Matches(host, RegNameChars);
     }
 
@@ -112,7 +115,7 @@ internal static class UriSyntax
         int percent;
         while ((percent = value.IndexOf(PercentSign)) >= 0)
         {
-            if (percent + PercentEncodedLength > value.Length || !char.IsAsciiHexDigit((char)value[percent + 1]) || !char.IsAsciiHexDigit((char)value[percent + 2]))
+            if (percent + PercentEncodedLength > value.Length || !IsHexDigits(value.Slice(percent + 1, PercentEncodedLength - 1)))
                 return false;
             value = value[(percent + PercentEncodedLength)..];
         }

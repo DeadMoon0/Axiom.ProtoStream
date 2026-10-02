@@ -22,22 +22,22 @@ public abstract class LengthPrefix
     }
 
     /// <summary>One byte, 0 to 255.</summary>
-    public static LengthPrefix UInt8 { get; } = new FixedSizePrefix("UInt8", 1, bigEndian: true);
+    public static LengthPrefix UInt8 { get; } = new FixedSizePrefix("UInt8", sizeof(byte), bigEndian: true);
 
     /// <summary>Two bytes, most significant first.</summary>
-    public static LengthPrefix UInt16BigEndian { get; } = new FixedSizePrefix("UInt16BigEndian", 2, bigEndian: true);
+    public static LengthPrefix UInt16BigEndian { get; } = new FixedSizePrefix("UInt16BigEndian", sizeof(ushort), bigEndian: true);
 
     /// <summary>Two bytes, least significant first.</summary>
-    public static LengthPrefix UInt16LittleEndian { get; } = new FixedSizePrefix("UInt16LittleEndian", 2, bigEndian: false);
+    public static LengthPrefix UInt16LittleEndian { get; } = new FixedSizePrefix("UInt16LittleEndian", sizeof(ushort), bigEndian: false);
 
     /// <summary>Three bytes, most significant first (HTTP/2 frame length).</summary>
-    public static LengthPrefix UInt24BigEndian { get; } = new FixedSizePrefix("UInt24BigEndian", 3, bigEndian: true);
+    public static LengthPrefix UInt24BigEndian { get; } = new FixedSizePrefix("UInt24BigEndian", UInt24Size, bigEndian: true);
 
     /// <summary>Four bytes, most significant first, limited to <see cref="int.MaxValue"/>.</summary>
-    public static LengthPrefix UInt32BigEndian { get; } = new FixedSizePrefix("UInt32BigEndian", 4, bigEndian: true);
+    public static LengthPrefix UInt32BigEndian { get; } = new FixedSizePrefix("UInt32BigEndian", sizeof(uint), bigEndian: true);
 
     /// <summary>Four bytes, least significant first, limited to <see cref="int.MaxValue"/>.</summary>
-    public static LengthPrefix UInt32LittleEndian { get; } = new FixedSizePrefix("UInt32LittleEndian", 4, bigEndian: false);
+    public static LengthPrefix UInt32LittleEndian { get; } = new FixedSizePrefix("UInt32LittleEndian", sizeof(uint), bigEndian: false);
 
     /// <summary>
     /// Unsigned LEB128 (protobuf, MQTT): seven bits per byte, least significant group first, at most five
@@ -51,10 +51,19 @@ public abstract class LengthPrefix
     /// <summary>A fixed number of hexadecimal ASCII digits, such as the four of a git pkt-line.</summary>
     public static LengthPrefix HexAscii(int digits)
     {
-        if (digits is < 1 or > 15)
-            throw new ArgumentOutOfRangeException(nameof(digits), digits, "A hex length prefix has 1 to 15 digits.");
+        if (digits is < 1 or > MaxHexDigits)
+            throw new ArgumentOutOfRangeException(nameof(digits), digits, $"A hex length prefix has 1 to {MaxHexDigits} digits.");
         return new HexAsciiPrefix(digits);
     }
+
+    /// <summary>Size of a three-byte length.</summary>
+    private const int UInt24Size = 3;
+
+    /// <summary>Most digits of a hex length: 15 hex digits cannot overflow a 64-bit length.</summary>
+    private const int MaxHexDigits = 15;
+
+    /// <summary>Bits in one byte.</summary>
+    private protected const int BitsPerByte = 8;
 
     /// <summary>Name of the encoding.</summary>
     public string Name { get; }
@@ -90,7 +99,7 @@ public abstract class LengthPrefix
         if (first.Length >= available)
             return TryRead(first[..available], out value, out size);
 
-        Span<byte> copy = stackalloc byte[16];
+        Span<byte> copy = stackalloc byte[MaxHexDigits + 1];
         rest.Slice(0, available).CopyTo(copy);
         return TryRead(copy[..available], out value, out size);
     }
@@ -104,6 +113,31 @@ public abstract class LengthPrefix
     }
 }
 
+/// <summary>Constants of unsigned LEB128 varints (protobuf, MQTT, WebAssembly).</summary>
+internal static class Leb128
+{
+    /// <summary>Set on every byte but the last.</summary>
+    public const byte ContinuationBit = 0x80;
+
+    /// <summary>The seven value bits of a byte.</summary>
+    public const byte PayloadMask = 0x7F;
+
+    /// <summary>Value bits carried per byte.</summary>
+    public const int PayloadBits = 7;
+
+    /// <summary>Most bytes of a 32-bit value: ceil(32 / 7).</summary>
+    public const int MaxBytes32 = 5;
+
+    /// <summary>Most bytes of a 64-bit value: ceil(64 / 7).</summary>
+    public const int MaxBytes64 = 10;
+
+    /// <summary>The tenth byte of a 64-bit value can only carry bit 63.</summary>
+    public const byte LastByteMax64 = 1;
+
+    /// <summary>Size of a GUID.</summary>
+    public const int GuidSize = 16;
+}
+
 internal enum PrefixStatus : byte
 {
     Ok,
@@ -112,7 +146,7 @@ internal enum PrefixStatus : byte
 }
 
 internal sealed class FixedSizePrefix(string name, int size, bool bigEndian)
-    : LengthPrefix(name, size, size >= 4 ? int.MaxValue : (1L << (8 * size)) - 1, isFixedSize: true)
+    : LengthPrefix(name, size, size >= sizeof(int) ? int.MaxValue : (1L << (BitsPerByte * size)) - 1, isFixedSize: true)
 {
     internal override PrefixStatus TryRead(ReadOnlySpan<byte> source, out long value, out int read)
     {
@@ -124,7 +158,7 @@ internal sealed class FixedSizePrefix(string name, int size, bool bigEndian)
         for (int i = 0; i < MaxSize; i++)
         {
             int index = bigEndian ? i : MaxSize - 1 - i;
-            value = (value << 8) | source[index];
+            value = (value << BitsPerByte) | source[index];
         }
 
         read = MaxSize;
@@ -138,25 +172,25 @@ internal sealed class FixedSizePrefix(string name, int size, bool bigEndian)
         for (int i = 0; i < MaxSize; i++)
         {
             int index = bigEndian ? MaxSize - 1 - i : i;
-            destination[index] = (byte)(value >> (8 * i));
+            destination[index] = (byte)(value >> (BitsPerByte * i));
         }
     }
 }
 
-internal sealed class VarIntPrefix() : LengthPrefix("VarInt", 5, int.MaxValue, isFixedSize: false)
+internal sealed class VarIntPrefix() : LengthPrefix("VarInt", Leb128.MaxBytes32, int.MaxValue, isFixedSize: false)
 {
     internal override PrefixStatus TryRead(ReadOnlySpan<byte> source, out long value, out int size)
     {
         value = 0;
         size = 0;
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < Leb128.MaxBytes32; i++)
         {
             if (i >= source.Length)
                 return PrefixStatus.NeedMore;
 
             byte b = source[i];
-            value |= (long)(b & 0x7F) << (7 * i);
-            if ((b & 0x80) == 0)
+            value |= (long)(b & Leb128.PayloadMask) << (Leb128.PayloadBits * i);
+            if ((b & Leb128.ContinuationBit) == 0)
             {
                 // A final group of zero after the first byte means a longer encoding than needed.
                 if (i > 0 && b == 0)
@@ -172,7 +206,7 @@ internal sealed class VarIntPrefix() : LengthPrefix("VarInt", 5, int.MaxValue, i
     internal override int GetSize(long value)
     {
         int size = 1;
-        while ((value >>= 7) != 0)
+        while ((value >>= Leb128.PayloadBits) != 0)
             size++;
         return size;
     }
@@ -180,18 +214,29 @@ internal sealed class VarIntPrefix() : LengthPrefix("VarInt", 5, int.MaxValue, i
     internal override void Write(long value, Span<byte> destination)
     {
         int i = 0;
-        while (value >= 0x80)
+        while (value >= Leb128.ContinuationBit)
         {
-            destination[i++] = (byte)(value | 0x80);
-            value >>= 7;
+            destination[i++] = (byte)(value | Leb128.ContinuationBit);
+            value >>= Leb128.PayloadBits;
         }
 
         destination[i] = (byte)value;
     }
 }
 
-internal sealed class QuicVarIntPrefix() : LengthPrefix("QuicVarInt", 8, (1L << 62) - 1, isFixedSize: false)
+internal sealed class QuicVarIntPrefix() : LengthPrefix("QuicVarInt", sizeof(ulong), (1L << ValueBits(sizeof(ulong))) - 1, isFixedSize: false)
 {
+    /// <summary>The top two bits of the first byte hold log2 of the encoded size.</summary>
+    private const int SizeBits = 2;
+
+    private const int SizeShift = BitsPerByte - SizeBits;
+
+    private const byte FirstByteValueMask = (1 << SizeShift) - 1;
+
+    private static int ValueBits(int size) => BitsPerByte * size - SizeBits;
+
+    private static long MaxValueFor(int size) => (1L << ValueBits(size)) - 1;
+
     internal override PrefixStatus TryRead(ReadOnlySpan<byte> source, out long value, out int size)
     {
         value = 0;
@@ -199,25 +244,28 @@ internal sealed class QuicVarIntPrefix() : LengthPrefix("QuicVarInt", 8, (1L << 
         if (source.IsEmpty)
             return PrefixStatus.NeedMore;
 
-        int length = 1 << (source[0] >> 6);
+        int length = 1 << (source[0] >> SizeShift);
         if (source.Length < length)
             return PrefixStatus.NeedMore;
 
-        value = source[0] & 0x3F;
+        value = source[0] & FirstByteValueMask;
         for (int i = 1; i < length; i++)
-            value = (value << 8) | source[i];
+            value = (value << BitsPerByte) | source[i];
 
         size = length;
         return PrefixStatus.Ok;
     }
 
-    internal override int GetSize(long value) => value switch
+    internal override int GetSize(long value)
     {
-        <= 63 => 1,
-        <= 16_383 => 2,
-        <= 1_073_741_823 => 4,
-        _ => 8,
-    };
+        foreach (int size in (ReadOnlySpan<int>)[sizeof(byte), sizeof(ushort), sizeof(uint)])
+        {
+            if (value <= MaxValueFor(size))
+                return size;
+        }
+
+        return sizeof(ulong);
+    }
 
     internal override void Write(long value, Span<byte> destination)
     {
@@ -225,16 +273,19 @@ internal sealed class QuicVarIntPrefix() : LengthPrefix("QuicVarInt", 8, (1L << 
         for (int i = size - 1; i >= 0; i--)
         {
             destination[i] = (byte)value;
-            value >>= 8;
+            value >>= BitsPerByte;
         }
 
-        destination[0] |= (byte)(System.Numerics.BitOperations.Log2((uint)size) << 6);
+        destination[0] |= (byte)(System.Numerics.BitOperations.Log2((uint)size) << SizeShift);
     }
 }
 
 internal sealed class HexAsciiPrefix(int digits)
-    : LengthPrefix($"HexAscii({digits})", digits, (1L << (4 * digits)) - 1, isFixedSize: true)
+    : LengthPrefix($"HexAscii({digits})", digits, (1L << (BitsPerHexDigit * digits)) - 1, isFixedSize: true)
 {
+    private const int BitsPerHexDigit = 4;
+    private const string LowerHexDigits = "0123456789abcdef";
+
     internal override PrefixStatus TryRead(ReadOnlySpan<byte> source, out long value, out int size)
     {
         value = 0;
@@ -247,7 +298,7 @@ internal sealed class HexAsciiPrefix(int digits)
             int nibble = HexValue(source[i]);
             if (nibble < 0)
                 return PrefixStatus.Malformed;
-            value = (value << 4) | (uint)nibble;
+            value = (value << BitsPerHexDigit) | (uint)nibble;
         }
 
         size = MaxSize;
@@ -260,16 +311,11 @@ internal sealed class HexAsciiPrefix(int digits)
     {
         for (int i = MaxSize - 1; i >= 0; i--)
         {
-            destination[i] = (byte)"0123456789abcdef"[(int)(value & 0xF)];
-            value >>= 4;
+            destination[i] = (byte)LowerHexDigits[(int)(value & (LowerHexDigits.Length - 1))];
+            value >>= BitsPerHexDigit;
         }
     }
 
-    internal static int HexValue(byte b) => b switch
-    {
-        >= (byte)'0' and <= (byte)'9' => b - '0',
-        >= (byte)'a' and <= (byte)'f' => b - 'a' + 10,
-        >= (byte)'A' and <= (byte)'F' => b - 'A' + 10,
-        _ => -1,
-    };
+    /// <returns>The value of a hex digit, or -1 for any other byte.</returns>
+    internal static int HexValue(byte b) => LowerHexDigits.IndexOf(char.ToLowerInvariant((char)b), StringComparison.Ordinal);
 }

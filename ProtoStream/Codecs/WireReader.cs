@@ -72,61 +72,61 @@ public ref struct WireReader
     }
 
     /// <summary>Two bytes, most significant first.</summary>
-    public ushort UInt16BigEndian() => Take(2, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt16BigEndian(b) : default;
+    public ushort UInt16BigEndian() => Take(sizeof(ushort), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt16BigEndian(b) : default;
 
     /// <summary>Two bytes, least significant first.</summary>
-    public ushort UInt16LittleEndian() => Take(2, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt16LittleEndian(b) : default;
+    public ushort UInt16LittleEndian() => Take(sizeof(ushort), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt16LittleEndian(b) : default;
 
     /// <summary>Two bytes, most significant first.</summary>
-    public short Int16BigEndian() => Take(2, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt16BigEndian(b) : default;
+    public short Int16BigEndian() => Take(sizeof(ushort), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt16BigEndian(b) : default;
 
     /// <summary>Two bytes, least significant first.</summary>
-    public short Int16LittleEndian() => Take(2, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt16LittleEndian(b) : default;
+    public short Int16LittleEndian() => Take(sizeof(ushort), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt16LittleEndian(b) : default;
 
     /// <summary>Four bytes, most significant first.</summary>
-    public uint UInt32BigEndian() => Take(4, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt32BigEndian(b) : default;
+    public uint UInt32BigEndian() => Take(sizeof(uint), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt32BigEndian(b) : default;
 
     /// <summary>Four bytes, least significant first.</summary>
-    public uint UInt32LittleEndian() => Take(4, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt32LittleEndian(b) : default;
+    public uint UInt32LittleEndian() => Take(sizeof(uint), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt32LittleEndian(b) : default;
 
     /// <summary>Four bytes, most significant first.</summary>
-    public int Int32BigEndian() => Take(4, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt32BigEndian(b) : default;
+    public int Int32BigEndian() => Take(sizeof(uint), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt32BigEndian(b) : default;
 
     /// <summary>Four bytes, least significant first.</summary>
-    public int Int32LittleEndian() => Take(4, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt32LittleEndian(b) : default;
+    public int Int32LittleEndian() => Take(sizeof(uint), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt32LittleEndian(b) : default;
 
     /// <summary>Eight bytes, most significant first.</summary>
-    public ulong UInt64BigEndian() => Take(8, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt64BigEndian(b) : default;
+    public ulong UInt64BigEndian() => Take(sizeof(ulong), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt64BigEndian(b) : default;
 
     /// <summary>Eight bytes, least significant first.</summary>
-    public ulong UInt64LittleEndian() => Take(8, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt64LittleEndian(b) : default;
+    public ulong UInt64LittleEndian() => Take(sizeof(ulong), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadUInt64LittleEndian(b) : default;
 
     /// <summary>Eight bytes, most significant first.</summary>
-    public long Int64BigEndian() => Take(8, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt64BigEndian(b) : default;
+    public long Int64BigEndian() => Take(sizeof(ulong), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt64BigEndian(b) : default;
 
     /// <summary>Eight bytes, least significant first.</summary>
-    public long Int64LittleEndian() => Take(8, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt64LittleEndian(b) : default;
+    public long Int64LittleEndian() => Take(sizeof(ulong), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadInt64LittleEndian(b) : default;
 
     /// <summary>IEEE 754 single precision, most significant byte first.</summary>
-    public float SingleBigEndian() => Take(4, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadSingleBigEndian(b) : default;
+    public float SingleBigEndian() => Take(sizeof(float), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadSingleBigEndian(b) : default;
 
     /// <summary>IEEE 754 double precision, most significant byte first.</summary>
-    public double DoubleBigEndian() => Take(8, out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadDoubleBigEndian(b) : default;
+    public double DoubleBigEndian() => Take(sizeof(double), out ReadOnlySpan<byte> b) ? BinaryPrimitives.ReadDoubleBigEndian(b) : default;
 
     /// <summary>A 16-byte GUID in RFC 9562 (big-endian) byte order.</summary>
-    public Guid GuidBigEndian() => Take(16, out ReadOnlySpan<byte> b) ? new Guid(b, bigEndian: true) : default;
+    public Guid GuidBigEndian() => Take(Leb128.GuidSize, out ReadOnlySpan<byte> b) ? new Guid(b, bigEndian: true) : default;
 
     /// <summary>Unsigned LEB128 of at most five bytes; non-minimal encodings fail.</summary>
     public uint VarUInt32()
     {
-        ulong value = ReadVarInt(5);
+        ulong value = ReadVarInt(Leb128.MaxBytes32);
         if (value > uint.MaxValue)
             Fail();
         return _failed ? 0 : (uint)value;
     }
 
     /// <summary>Unsigned LEB128 of at most ten bytes; non-minimal encodings fail.</summary>
-    public ulong VarUInt64() => ReadVarInt(10);
+    public ulong VarUInt64() => ReadVarInt(Leb128.MaxBytes64);
 
     /// <summary>A length in <paramref name="prefix"/> encoding that must not exceed <paramref name="max"/>.</summary>
     public long Length(LengthPrefix prefix, long max)
@@ -242,12 +242,12 @@ public ref struct WireReader
             if (_failed)
                 return 0;
 
-            value |= (ulong)(b & 0x7F) << (7 * i);
-            if ((b & 0x80) == 0)
+            value |= (ulong)(b & Leb128.PayloadMask) << (Leb128.PayloadBits * i);
+            if ((b & Leb128.ContinuationBit) == 0)
             {
                 if (i > 0 && b == 0)
                     break; // non-minimal
-                if (i == 9 && b > 1)
+                if (i == Leb128.MaxBytes64 - 1 && b > Leb128.LastByteMax64)
                     break; // more than 64 bits
                 return value;
             }

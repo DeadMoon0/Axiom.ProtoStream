@@ -161,7 +161,7 @@ public static class CodecHarness
     private static IEnumerable<ReadOnlySequence<byte>> Splits(byte[] wire)
     {
         // Every split for small inputs; for large inputs a spread of positions keeps the check fast.
-        if (wire.Length <= 2048)
+        if (wire.Length <= FullSplitLimit)
         {
             foreach (ReadOnlySequence<byte> split in Segments.EverySplit(wire))
                 yield return split;
@@ -169,37 +169,66 @@ public static class CodecHarness
         }
 
         yield return new ReadOnlySequence<byte>(wire);
-        int step = wire.Length / 512;
+        int step = wire.Length / SampledSplits;
         for (int cut = 1; cut < wire.Length; cut += step)
             yield return Segments.Split(wire, cut);
+    }
+
+    /// <summary>Inputs up to this size are split at every position; larger ones at a spread of positions.</summary>
+    private const int FullSplitLimit = 2048;
+
+    /// <summary>Number of split positions tried for a large input.</summary>
+    private const int SampledSplits = 512;
+
+    /// <summary>Most mutations applied to one sample.</summary>
+    private const int MaxMutations = 4;
+
+    /// <summary>Longest run of bytes a duplication repeats.</summary>
+    private const int MaxDuplicatedRun = 15;
+
+    private const int BitsPerByte = 8;
+
+    private enum Mutation
+    {
+        FlipBit,
+        ReplaceByte,
+        InsertByte,
+        RemoveByte,
+        Truncate,
+        DuplicateRun,
     }
 
     private static byte[] Mutate(byte[] sample, Random random)
     {
         var bytes = new List<byte>(sample);
-        int mutations = random.Next(1, 5);
+        int mutations = random.Next(1, MaxMutations + 1);
+        Mutation[] kinds = Enum.GetValues<Mutation>();
         for (int m = 0; m < mutations; m++)
         {
             int position = bytes.Count == 0 ? 0 : random.Next(bytes.Count);
-            switch (random.Next(6))
+            Mutation kind = kinds[random.Next(kinds.Length)];
+            if (bytes.Count == 0 && kind != Mutation.InsertByte)
+                kind = Mutation.InsertByte;
+
+            switch (kind)
             {
-                case 0 when bytes.Count > 0:
-                    bytes[position] ^= (byte)(1 << random.Next(8));
+                case Mutation.FlipBit:
+                    bytes[position] ^= (byte)(1 << random.Next(BitsPerByte));
                     break;
-                case 1 when bytes.Count > 0:
-                    bytes[position] = (byte)random.Next(256);
+                case Mutation.ReplaceByte:
+                    bytes[position] = RandomByte(random);
                     break;
-                case 2:
-                    bytes.Insert(position, (byte)random.Next(256));
+                case Mutation.InsertByte:
+                    bytes.Insert(position, RandomByte(random));
                     break;
-                case 3 when bytes.Count > 0:
+                case Mutation.RemoveByte:
                     bytes.RemoveAt(position);
                     break;
-                case 4 when bytes.Count > 0:
+                case Mutation.Truncate:
                     bytes.RemoveRange(position, bytes.Count - position);
                     break;
                 default:
-                    int length = Math.Min(bytes.Count - position, random.Next(1, 16));
+                    int length = Math.Min(bytes.Count - position, random.Next(1, MaxDuplicatedRun + 1));
                     if (length > 0)
                         bytes.InsertRange(position, bytes.GetRange(position, length));
                     break;
@@ -208,6 +237,8 @@ public static class CodecHarness
 
         return [.. bytes];
     }
+
+    private static byte RandomByte(Random random) => (byte)random.Next(byte.MaxValue + 1);
 }
 
 /// <summary>Assertions about protocol definitions.</summary>

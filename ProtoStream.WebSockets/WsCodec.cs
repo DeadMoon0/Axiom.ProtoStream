@@ -78,6 +78,7 @@ internal static class WsFrame
 internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
 {
     private const int StackTextLimit = 512;
+    private const int BitsPerByte = 8;
 
     /// <summary>Marks that outgoing messages are not split into fragments.</summary>
     private const int NoFragmentation = int.MaxValue;
@@ -155,7 +156,7 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
 
             bool control = WsFrame.IsControl(opcode);
             if (control && (!fin || length > WsFrame.MaxControlPayload))
-                return ProtocolError(ref context, "A control frame is fragmented or longer than 125 bytes.");
+                return ProtocolError(ref context, $"A control frame is fragmented or longer than {WsFrame.MaxControlPayload} bytes.");
             if (!control && (opcode == WsOpcode.Continuation) != _fragmentedOpcode.HasValue)
                 return ProtocolError(ref context, opcode == WsOpcode.Continuation ? "A continuation frame has no message to continue." : "A new message started before the previous one ended.");
             long assembled = opcode == WsOpcode.Continuation ? _message.Length : 0;
@@ -389,7 +390,7 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
     private static void Xor(ReadOnlySpan<byte> source, ReadOnlySpan<byte> key, Span<byte> destination)
     {
         uint key32 = BinaryPrimitives.ReadUInt32LittleEndian(key);
-        ulong key64 = key32 | ((ulong)key32 << 32);
+        ulong key64 = key32 | ((ulong)key32 << (sizeof(uint) * BitsPerByte));
         int i = 0;
         for (; i + sizeof(ulong) <= source.Length; i += sizeof(ulong))
             BinaryPrimitives.WriteUInt64LittleEndian(destination[i..], BinaryPrimitives.ReadUInt64LittleEndian(source[i..]) ^ key64);
