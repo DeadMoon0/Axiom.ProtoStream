@@ -219,6 +219,8 @@ public sealed class HttpRequest
 
     internal int HeaderCount => _headerCount;
 
+    internal MessageStamp Stamp => _stamp;
+
     internal ReadOnlySpan<byte> HeadSpan => _head.Span;
 
     internal ReadOnlyMemory<byte> Head => _head;
@@ -288,20 +290,39 @@ public sealed class HttpRequest
 /// <summary>Where a header field lies in the request head.</summary>
 internal readonly record struct HeaderEntry(int NameStart, int NameLength, int ValueStart, int ValueLength);
 
-/// <summary>One header field of a request.</summary>
+/// <summary>One header field of a request. Valid as long as its request; the byte views share its memory.</summary>
 public readonly struct HttpHeader
 {
-    internal HttpHeader(ReadOnlyMemory<byte> name, ReadOnlyMemory<byte> value)
+    private readonly ReadOnlyMemory<byte> _name;
+    private readonly ReadOnlyMemory<byte> _value;
+    private readonly MessageStamp _stamp;
+
+    internal HttpHeader(ReadOnlyMemory<byte> name, ReadOnlyMemory<byte> value, MessageStamp stamp)
     {
-        NameBytes = name;
-        ValueBytes = value;
+        _name = name;
+        _value = value;
+        _stamp = stamp;
     }
 
-    /// <summary>The field name as sent.</summary>
-    public ReadOnlyMemory<byte> NameBytes { get; }
+    /// <summary>The field name as sent. A view into the request: copy it to keep it past the next read.</summary>
+    public ReadOnlyMemory<byte> NameBytes
+    {
+        get
+        {
+            _stamp.ThrowIfStale();
+            return _name;
+        }
+    }
 
-    /// <summary>The field value, without surrounding whitespace.</summary>
-    public ReadOnlyMemory<byte> ValueBytes { get; }
+    /// <summary>The field value, without surrounding whitespace. A view into the request: copy it to keep it past the next read.</summary>
+    public ReadOnlyMemory<byte> ValueBytes
+    {
+        get
+        {
+            _stamp.ThrowIfStale();
+            return _value;
+        }
+    }
 
     /// <summary>The field name as a string.</summary>
     public string Name => Encoding.ASCII.GetString(NameBytes.Span);
@@ -331,7 +352,7 @@ public readonly struct HttpRequestHeaders
             if ((uint)index >= (uint)Count)
                 throw new ArgumentOutOfRangeException(nameof(index));
             HeaderEntry entry = _request.HeaderAt(index);
-            return new HttpHeader(_request.Head.Slice(entry.NameStart, entry.NameLength), _request.Head.Slice(entry.ValueStart, entry.ValueLength));
+            return new HttpHeader(_request.Head.Slice(entry.NameStart, entry.NameLength), _request.Head.Slice(entry.ValueStart, entry.ValueLength), _request.Stamp);
         }
     }
 

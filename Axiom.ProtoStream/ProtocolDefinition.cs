@@ -47,7 +47,8 @@ public sealed class ProtocolDefinition<TIn, TOut>
         Func<Violation, TOut?>? violationReply,
         Func<TOut>? onClose,
         TimeSpan heartbeatInterval,
-        Func<TOut>? heartbeat)
+        Func<TOut>? heartbeat,
+        FlushPolicy flushPolicy)
     {
         Name = name;
         Warnings = warnings;
@@ -64,6 +65,7 @@ public sealed class ProtocolDefinition<TIn, TOut>
         OnCloseMessage = onClose;
         HeartbeatInterval = heartbeatInterval;
         HeartbeatMessage = heartbeat;
+        FlushPolicy = flushPolicy;
 
         var names = new string[states.Length];
         for (int i = 0; i < states.Length; i++)
@@ -112,4 +114,6 @@ public sealed class ProtocolDefinition<TIn, TOut>
     internal TimeSpan HeartbeatInterval { get; }
 
     internal Func<TOut>? HeartbeatMessage { get; }
+
+    internal FlushPolicy FlushPolicy { get; }
 }

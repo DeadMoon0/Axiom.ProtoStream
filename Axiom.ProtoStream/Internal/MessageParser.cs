@@ -67,7 +67,7 @@ internal sealed class MessageParser(int maxBufferedBytes, PayloadReader? payload
     public override PipeReader StartPayload(IPayloadDecoder decoder)
     {
         LastPayloadDecoder = decoder;
-        return payload is null ? DetachedPayload.Instance : payload.Start(decoder);
+        return payload is null ? DetachedPayload.Instance : payload.Start(decoder, new MessageStamp(Generation));
     }
 
     public ParseOutcome Parse<TIn>(IMessageReader<TIn> reader, in ReadOnlySequence<byte> input, bool isCompleted, out TIn message)

@@ -35,6 +35,8 @@ internal sealed class ProtocolBuilder<TIn, TOut>(string name)
 
     public Func<TOut>? HeartbeatMessage { get; private set; }
 
+    public FlushPolicy FlushPolicy { get; private set; }
+
     public List<string> Errors { get; } = [];
 
     public IStatesStage<TIn, TOut> Codec(Func<ICodec<TIn, TOut>> factory)
@@ -112,6 +114,14 @@ internal sealed class ProtocolBuilder<TIn, TOut>(string name)
             Errors.Add("Heartbeat is described twice.");
         HeartbeatInterval = interval;
         HeartbeatMessage = message;
+        return this;
+    }
+
+    public IPolicyStage<TIn, TOut> Flushing(FlushPolicy policy)
+    {
+        if (!Enum.IsDefined(policy))
+            Errors.Add($"{policy} is not a flush policy.");
+        FlushPolicy = policy;
         return this;
     }
 

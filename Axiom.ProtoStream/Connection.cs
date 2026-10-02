@@ -121,12 +121,18 @@ public sealed class Connection : IAsyncDisposable
             }
         }
 
+        bool quiet = Current is not IClosableSession current || await current.QuiesceAsync().ConfigureAwait(false);
         Input.CancelPendingRead();
-        await CompletePipesAsync().ConfigureAwait(false);
-        (Current as IClosableSession)?.ReleaseResources();
+        if (quiet)
+        {
+            await CompletePipesAsync().ConfigureAwait(false);
+            (Current as IClosableSession)?.ReleaseResources();
+        }
+
+        // Otherwise a read or a write is still running on another task. Its buffers and the pipe's segments are left
+        // to the garbage collector: back in the shared pools, another connection could rent them while they are read.
         if (!Options.LeaveOpen)
             await DisposeStreamsAsync().ConfigureAwait(false);
-        WriteLock.Dispose();
     }
 
     internal async ValueTask<Session<TIn, TOut>> OpenSessionAsync<TIn, TOut>(ProtocolDefinition<TIn, TOut> definition, CancellationToken cancellationToken)
@@ -206,6 +212,8 @@ public sealed class Connection : IAsyncDisposable
 internal interface IClosableSession : ISession
 {
     ValueTask CloseForDisposeAsync();
+
+    ValueTask<bool> QuiesceAsync();
 
     void ReleaseResources();
 }

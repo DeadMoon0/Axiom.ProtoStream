@@ -22,7 +22,39 @@
 | Unread payloads are drained only up to a limit. | `MaxPayloadDrain`. |
 | Turning a protection off is visible. | Named opt-outs only, reported in `ProtocolDefinition.Warnings`; `WarningsAsErrors` for CI. |
 | A buggy codec cannot hang or corrupt a session. | Contract checks: a message consumes at least one byte, positions stay in the input, one outcome per parse. |
-| Pooled messages refuse use after reuse. | Generation stamps plus two instances in rotation. |
+| Pooled messages refuse use after reuse. | Generation stamps plus two instances in rotation, one rotation per message kind. |
+| Nothing outlives its connection's memory. | See [Isolation between connections](#isolation-between-connections). |
+
+## Isolation between connections
+
+Connections share memory pools (`MemoryPool<byte>.Shared` for pipe segments, `ArrayPool<byte>.Shared` for
+session buffers). A buffer one connection returns may be rented by the next, so every way back into returned
+memory is closed:
+
+| Way back into returned memory | Guard |
+|---|---|
+| A pooled message (HTTP request, WebSocket message) used after the next read | `StaleMessageException` on every accessor. |
+| A message used after `SwitchAsync` or after the connection was disposed | Releasing a session advances its read generation first, so its messages turn stale before their memory is returned. |
+| A header (`HttpHeader`) copied out of a request and kept | The header carries its request's stamp; its byte views throw once the request is stale. |
+| A body reader (`HttpRequest.Body`) kept past the next request | Each payload gets its own reader bound to the message's stamp; the next request's body cannot be read through it. |
+| `Connection.DisposeAsync` while another task reads or writes | Disposal first stops the session: reads end, stuck flushes are cancelled and fail with `TransportException`, the write lock is taken. Only then are buffers returned. If something still runs after the close timeout, the buffers are left to the garbage collector instead of the pools. |
+| A frozen `HttpResponse` shared by many connections | `Freeze()` makes it immutable; its head is encoded once and only read afterwards. |
+
+What the framework shares across connections is immutable: definitions, compiled message sets, framers and
+payload encoders. Codecs are created per session. Violation details never contain peer bytes, and error replies
+(HTTP 4xx, WebSocket close) carry no detail at all.
+
+**Still the application's responsibility**
+
+- **Byte views are views.** `ReadOnlyMemory<byte>` taken from a message (`PathBytes`, `ValueBytes`, `WsBinary.Data`,
+  `WsText.Utf8`, `RawData.Data`) is not stamped once it is taken: copy it, or call `Retain()`, to keep it past
+  the next read.
+- **Relaying a received message to other sessions** (a broadcast) is safe when every write is awaited before
+  the next read, as the showcase does. A fire-and-forget relay can be encoded after the memory is reused.
+- **Shared callbacks** (an `IProtocolObserver`, an `IMessageSerializer`, `OnEnter` and responder delegates) run on
+  many connections at once and must be thread-safe.
+- **Pools are not cleared.** Returned memory keeps its old bytes. That is why the guards above exist; code that
+  reads pooled memory without them (a custom codec reading past what it wrote) can see another connection's data.
 
 ## Defaults
 

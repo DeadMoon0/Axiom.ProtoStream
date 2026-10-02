@@ -36,7 +36,15 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
 
     /// <summary>Size of the pooled buffer a streamed payload is copied through.</summary>
     private const int PayloadCopyBufferSize = 16 * 1024;
+
+    /// <summary>Output that <see cref="FlushPolicy.WhileInputIsBuffered"/> holds back at most before it flushes anyway.</summary>
+    private const int MaxDeferredFlushBytes = 64 * 1024;
     private static readonly TimeSpan BudgetWindow = TimeSpan.FromSeconds(1);
+
+    // States of _readInFlight. TornDown is final: the connection was disposed and no read may start again.
+    private const int ReadIdle = 0;
+    private const int ReadRunning = 1;
+    private const int ReadTornDown = 2;
 
     private readonly Connection _connection;
     private readonly ProtocolDefinition<TIn, TOut> _definition;
@@ -61,11 +69,15 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     private int _state;
     private int _status;
     private int _readInFlight;
+    private int _flushDeferred;
+    private int _tornDown;
+    private TaskCompletionSource? _quiesceWaiter;
     private int _released;
     private bool _firstMessageSeen;
     private ReadOnlySequence<byte> _buffer;
     private bool _bufferCompleted;
     private bool _hasBuffer;
+    private bool _inputAfterDetached;
     private bool _timerArmed;
     private MessageEnumerable? _messages;
 
@@ -113,24 +125,64 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     public IAsyncEnumerable<TIn> Messages => _messages ??= new MessageEnumerable(this);
 
     /// <summary>Reads the next message handed to the user. Only one read may be in progress.</summary>
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-    public async ValueTask<ProtocolReadResult<TIn>> ReadAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// A message that is already buffered and needs no write to dispatch is parsed and returned synchronously;
+    /// everything else (waiting for input, automatic replies, violations, payload draining) takes the
+    /// asynchronous path.
+    /// </remarks>
+    public ValueTask<ProtocolReadResult<TIn>> ReadAsync(CancellationToken cancellationToken)
     {
-        EnterRead();
+        try
+        {
+            if (!TryEnterRead())
+                return default;
+        }
+        catch (ProtocolStateException ex)
+        {
+            return ValueTask.FromException<ProtocolReadResult<TIn>>(ex);
+        }
+
+        bool handedOver = false;
         try
         {
             if (Status == SessionStatus.Switched)
                 throw new ProtocolSwitchedException(Protocol);
             if (Status != SessionStatus.Open)
                 return default;
+            if (_payload.HasPayload)
+            {
+                handedOver = true;
+                return ReadSlowAsync(releasePrevious: true, default, cancellationToken);
+            }
 
-            await ReleasePreviousMessageAsync(releaseInput: false, cancellationToken).ConfigureAwait(false);
             _parser.Generation.Advance();
-            return await ReadNextMessageAsync(cancellationToken).ConfigureAwait(false);
+            while (_hasBuffer && !_buffer.IsEmpty)
+            {
+                ParseOutcome outcome = ParseBuffered(out TIn message);
+                DispatchStep step = outcome.Kind == ParseOutcomeKind.Message ? TryDispatch(message) : DispatchStep.Async;
+                if (step == DispatchStep.Deliver)
+                    return new ValueTask<ProtocolReadResult<TIn>>(new ProtocolReadResult<TIn>(message));
+                if (step == DispatchStep.Async)
+                {
+                    handedOver = true;
+                    return ReadSlowAsync(releasePrevious: false, new PendingParse(outcome, message), cancellationToken);
+                }
+
+                if (Status != SessionStatus.Open)
+                    return default;
+            }
+
+            handedOver = true;
+            return ReadSlowAsync(releasePrevious: false, default, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return ValueTask.FromException<ProtocolReadResult<TIn>>(ex);
         }
         finally
         {
-            Volatile.Write(ref _readInFlight, 0);
+            if (!handedOver)
+                ExitRead();
         }
     }
 
@@ -141,7 +193,32 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     public ValueTask WriteAsync(TOut message, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(message);
-        return WriteMessageAsync(message, WriteMode.User, cancellationToken);
+        if (cancellationToken.IsCancellationRequested || !TryEnterWriteLock())
+            return WriteMessageAsync(message, WriteMode.User, cancellationToken);
+
+        // The lock was free: a write that completes synchronously never enters an asynchronous method.
+        bool handedOver = false;
+        try
+        {
+            ValueTask written = WriteLockedAsync(message, WriteMode.User, cancellationToken);
+            if (written.IsCompletedSuccessfully)
+            {
+                written.GetAwaiter().GetResult();
+                return default;
+            }
+
+            handedOver = true;
+            return ReleaseWriteLockAfterAsync(written);
+        }
+        catch (Exception ex)
+        {
+            return ValueTask.FromException(ex);
+        }
+        finally
+        {
+            if (!handedOver)
+                _connection.WriteLock.Release();
+        }
     }
 
     /// <summary>
@@ -191,7 +268,8 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         where TOut2 : class
     {
         ArgumentNullException.ThrowIfNull(protocolSwitch);
-        EnterRead();
+        if (!TryEnterRead())
+            throw new ProtocolStateException("The connection was disposed.");
         try
         {
             ThrowIfNotWritable();
@@ -204,6 +282,8 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             {
                 if (protocolSwitch.FinalMessage is { } finalMessage)
                     await WriteLockedAsync(finalMessage, WriteMode.Switch, cancellationToken).ConfigureAwait(false);
+                else if (Volatile.Read(ref _flushDeferred) != 0)
+                    await FlushAsync(cancellationToken).ConfigureAwait(false);
                 SetStatus(SessionStatus.Switched);
                 ReleaseResources();
             }
@@ -214,7 +294,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         }
         finally
         {
-            Volatile.Write(ref _readInFlight, 0);
+            ExitRead();
         }
 
         if (protocolSwitch.Transport is { } wrap)
@@ -249,6 +329,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
         try
         {
+            await FlushDeferredAsync(linked.Token).ConfigureAwait(false);
             if (_definition.OnCloseMessage is { } closing)
             {
                 await WriteMessageAsync(closing(), WriteMode.Closing, linked.Token).ConfigureAwait(false);
@@ -294,12 +375,57 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
 
     void IClosableSession.ReleaseResources() => ReleaseResources();
 
+    /// <summary>
+    /// Stops the session for disposal. True once no read, payload read or write runs any more, so its buffers
+    /// may go back to the shared pools; false when one still runs after the close timeout.
+    /// </summary>
+    async ValueTask<bool> IClosableSession.QuiesceAsync()
+    {
+        SetStatus(SessionStatus.Closed);
+        Interlocked.Exchange(ref _tornDown, 1);
+        var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Interlocked.Exchange(ref _quiesceWaiter, waiter);
+        _output.CancelPendingFlush();
+        _input.CancelPendingRead();
+
+        bool readStopped = Interlocked.CompareExchange(ref _readInFlight, ReadTornDown, ReadIdle) == ReadIdle
+            || await CompletesWithinAsync(waiter.Task, _limits.CloseTimeout).ConfigureAwait(false);
+        bool writeStopped = await _connection.WriteLock.WaitAsync(_limits.CloseTimeout).ConfigureAwait(false);
+        if (writeStopped)
+            _connection.WriteLock.Release(); // later writers find the session closed before they touch a buffer
+        return readStopped && writeStopped && !_payload.HasOutstandingRead;
+    }
+
+    private async ValueTask<bool> CompletesWithinAsync(Task task, TimeSpan timeout)
+    {
+        try
+        {
+            await task.WaitAsync(timeout, _time).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            return false;
+        }
+    }
+
     // ---- reading -------------------------------------------------------------------------------
 
-    private void EnterRead()
+    /// <returns>False when the connection was disposed: nothing can be read any more.</returns>
+    private bool TryEnterRead() => Interlocked.CompareExchange(ref _readInFlight, ReadRunning, ReadIdle) switch
     {
-        if (Interlocked.Exchange(ref _readInFlight, 1) != 0)
-            throw new ProtocolStateException("Another read is already in progress on this session.") { Guidance = "Read from one loop only; writing is allowed from anywhere." };
+        ReadIdle => true,
+        ReadTornDown => false,
+        _ => throw new ProtocolStateException("Another read is already in progress on this session.") { Guidance = "Read from one loop only; writing is allowed from anywhere." },
+    };
+
+    // Pairs with QuiesceAsync (both full fences): a read that ends while the connection is being disposed hands
+    // the teardown over, so the session's buffers are released only once nothing reads them.
+    private void ExitRead()
+    {
+        Interlocked.Exchange(ref _readInFlight, ReadIdle);
+        if (Volatile.Read(ref _quiesceWaiter) is { } waiter && Interlocked.CompareExchange(ref _readInFlight, ReadTornDown, ReadIdle) == ReadIdle)
+            waiter.TrySetResult();
     }
 
     private async ValueTask ReleasePreviousMessageAsync(bool releaseInput, CancellationToken cancellationToken)
@@ -322,59 +448,83 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         }
     }
 
-    private async ValueTask<ProtocolReadResult<TIn>> ReadNextMessageAsync(CancellationToken cancellationToken)
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    private async ValueTask<ProtocolReadResult<TIn>> ReadSlowAsync(bool releasePrevious, PendingParse pending, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (releasePrevious)
+            {
+                await ReleasePreviousMessageAsync(releaseInput: false, cancellationToken).ConfigureAwait(false);
+                _parser.Generation.Advance();
+            }
+
+            return await ReadNextMessageAsync(pending, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            ExitRead();
+        }
+    }
+
+    private async ValueTask<ProtocolReadResult<TIn>> ReadNextMessageAsync(PendingParse pending, CancellationToken cancellationToken)
     {
         try
         {
             while (true)
             {
-                // Messages are parsed from the bytes of the last pipe read until more are needed. Pipelined
-                // messages then cost no pipe operations, and a delivered message stays valid: the pipe is advanced
-                // past it only when the session reads from the pipe again.
-                if (!_hasBuffer || (_buffer.IsEmpty && !_bufferCompleted))
-                {
-                    if (_hasBuffer)
-                    {
-                        _hasBuffer = false;
-                        _input.AdvanceTo(_buffer.Start, _buffer.End);
-                    }
-
-                    ReadResult read = await ReadInputAsync(cancellationToken).ConfigureAwait(false);
-                    if (read.IsCanceled)
-                    {
-                        _input.AdvanceTo(read.Buffer.Start);
-                        if (_timerArmed && _timer.Fired)
-                            throw await ViolateAsync(ViolationCode.Timeout, _firstMessageSeen ? "No complete message arrived within the idle timeout." : "No complete first message arrived in time.").ConfigureAwait(false);
-                        continue; // a cancellation left behind by a timer that fired after an earlier read completed
-                    }
-
-                    _buffer = read.Buffer;
-                    _bufferCompleted = read.IsCompleted;
-                    _hasBuffer = true;
-                }
-
-                ReadOnlySequence<byte> buffer = _buffer;
-                if (buffer.IsEmpty && _bufferCompleted)
-                {
-                    _hasBuffer = false;
-                    _input.AdvanceTo(buffer.End);
-                    SetStatus(SessionStatus.Closed);
-                    return default;
-                }
-
                 ParseOutcome outcome;
                 TIn message;
-                try
+                if (pending.IsSet)
                 {
-                    outcome = _parser.Parse(CurrentReader(), buffer, _bufferCompleted, out message);
+                    // Parsed by the synchronous path, which stopped because dispatching it needs to wait.
+                    outcome = pending.Outcome;
+                    message = pending.Message!;
+                    pending = default;
                 }
-                catch (CodecContractException ex)
+                else
                 {
-                    _hasBuffer = false;
-                    _input.AdvanceTo(buffer.Start, buffer.End);
-                    throw Fault(ex);
+                    // Messages are parsed from the bytes of the last pipe read until more are needed. Pipelined
+                    // messages then cost no pipe operations, and a delivered message stays valid: the pipe is
+                    // advanced past it only when the session reads from the pipe again.
+                    if (!_hasBuffer || (_buffer.IsEmpty && !_bufferCompleted))
+                    {
+                        if (_hasBuffer)
+                        {
+                            _hasBuffer = false;
+                            _input.AdvanceTo(_buffer.Start, _buffer.End);
+                        }
+
+                        ReadResult read = await ReadInputAsync(cancellationToken).ConfigureAwait(false);
+                        if (read.IsCanceled)
+                        {
+                            _input.AdvanceTo(read.Buffer.Start);
+                            if (_timerArmed && _timer.Fired)
+                                throw await ViolateAsync(ViolationCode.Timeout, _firstMessageSeen ? "No complete message arrived within the idle timeout." : "No complete first message arrived in time.").ConfigureAwait(false);
+                            if (Status != SessionStatus.Open)
+                                return default; // the connection is being disposed
+                            continue; // a cancellation left behind by a timer that fired after an earlier read completed
+                        }
+
+                        _buffer = read.Buffer;
+                        _bufferCompleted = read.IsCompleted;
+                        _hasBuffer = true;
+                    }
+
+                    if (_buffer.IsEmpty && _bufferCompleted)
+                    {
+                        _hasBuffer = false;
+                        _input.AdvanceTo(_buffer.End);
+                        await FlushDeferredBeforeEndAsync(cancellationToken).ConfigureAwait(false);
+                        SetStatus(SessionStatus.Closed);
+                        return default;
+                    }
+
+                    outcome = ParseBuffered(out message);
                 }
 
+                // Only a message moves the buffer; for the other outcomes it still starts where parsing started.
+                ReadOnlySequence<byte> buffer = _buffer;
                 switch (outcome.Kind)
                 {
                     case ParseOutcomeKind.NeedMore:
@@ -399,19 +549,6 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
                         throw await ViolateAsync(outcome.Code, outcome.Detail ?? "The input violates the protocol.", outcome.ProtocolErrorCode).ConfigureAwait(false);
 
                     default:
-                        if (outcome.Detached)
-                        {
-                            // The message lives in session memory and may claim a payload that reads the pipe directly.
-                            _hasBuffer = false;
-                            _input.AdvanceTo(outcome.Consumed);
-                        }
-                        else
-                        {
-                            _buffer = buffer.Slice(outcome.Consumed);
-                        }
-
-                        _firstMessageSeen = true;
-                        Metrics.Add(Metrics.MessagesReceived, Protocol);
                         if (await DispatchAsync(message, cancellationToken).ConfigureAwait(false))
                             return new ProtocolReadResult<TIn>(message);
                         if (Status != SessionStatus.Open)
@@ -430,6 +567,59 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     }
 
     /// <summary>
+    /// Parses the next message from the bytes of the last pipe read. A parsed message is booked: the buffer moves
+    /// past it (or the pipe, when the message was detached into session memory) and it is counted.
+    /// </summary>
+    private ParseOutcome ParseBuffered(out TIn message)
+    {
+        ReadOnlySequence<byte> buffer = _buffer;
+        ParseOutcome outcome;
+        try
+        {
+            outcome = _parser.Parse(CurrentReader(), buffer, _bufferCompleted, out message);
+        }
+        catch (CodecContractException ex)
+        {
+            _hasBuffer = false;
+            _input.AdvanceTo(buffer.Start, buffer.End);
+            throw Fault(ex);
+        }
+
+        if (outcome.Kind == ParseOutcomeKind.Message)
+        {
+            if (outcome.Detached)
+            {
+                // The message lives in session memory and may claim a payload that reads the pipe directly.
+                _inputAfterDetached = !buffer.Slice(outcome.Consumed).IsEmpty;
+                _hasBuffer = false;
+                _input.AdvanceTo(outcome.Consumed);
+            }
+            else
+            {
+                _buffer = buffer.Slice(outcome.Consumed);
+            }
+
+            _firstMessageSeen = true;
+            Metrics.Add(Metrics.MessagesReceived, Protocol);
+        }
+
+        return outcome;
+    }
+
+    // The peer finished sending; answers it may still read go out before the session ends.
+    private async ValueTask FlushDeferredBeforeEndAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await FlushDeferredAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (TransportException)
+        {
+            // The peer is gone in both directions; ending the session is all that is left.
+        }
+    }
+
+    /// <summary>
     /// Reads from the pipe. The timeout is armed only when the read actually waits, once per message: buffered
     /// messages cost no timer operations, and a peer trickling bytes cannot restart the clock.
     /// </summary>
@@ -438,10 +628,15 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         try
         {
             ValueTask<ReadResult> pending = _input.ReadAsync(cancellationToken);
-            if (!pending.IsCompleted && !_timerArmed)
+            if (!pending.IsCompleted)
             {
-                _timer.Arm(_firstMessageSeen ? _limits.IdleTimeout : _limits.FirstMessageTimeout);
-                _timerArmed = true;
+                // Held-back answers must reach the peer before the session waits for it, or both would wait.
+                await FlushDeferredAsync(cancellationToken).ConfigureAwait(false);
+                if (!_timerArmed)
+                {
+                    _timer.Arm(_firstMessageSeen ? _limits.IdleTimeout : _limits.FirstMessageTimeout);
+                    _timerArmed = true;
+                }
             }
 
             return await pending.ConfigureAwait(false);
@@ -459,6 +654,43 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             _timerArmed = false;
             _timer.Disarm();
         }
+    }
+
+    private enum DispatchStep : byte
+    {
+        /// <summary>The message goes to the user.</summary>
+        Deliver,
+
+        /// <summary>The framework handled it without writing; read on.</summary>
+        Handled,
+
+        /// <summary>Dispatching needs a write or a violation: <see cref="DispatchAsync"/> does it.</summary>
+        Async,
+    }
+
+    /// <summary>Applies a transition that needs no write; anything else is left untouched for <see cref="DispatchAsync"/>.</summary>
+    private DispatchStep TryDispatch(TIn message)
+    {
+        CompiledState<TIn, TOut> state = _states[Volatile.Read(ref _state)];
+        int typeId = _definition.InboundTypes.Find(message.GetType());
+        if (typeId < 0 || !state.Inbound[typeId].IsDefined)
+            return DispatchStep.Async;
+
+        InboundTransition<TIn, TOut> transition = state.Inbound[typeId];
+        if (transition.Action == InboundAction.Respond)
+            return DispatchStep.Async;
+        if (transition.Next >= 0)
+        {
+            CompiledState<TIn, TOut> target = _states[transition.Next];
+            if (target.OnEnter is not null)
+                return DispatchStep.Async;
+            lock (_stateLock)
+                _state = transition.Next;
+            if (target.IsFinal)
+                SetStatus(SessionStatus.Closed);
+        }
+
+        return transition.Action == InboundAction.Delegate ? DispatchStep.Deliver : DispatchStep.Handled;
     }
 
     /// <returns>True when the message goes to the user.</returns>
@@ -582,6 +814,30 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         }
     }
 
+    private bool TryEnterWriteLock()
+    {
+        try
+        {
+            return _connection.WriteLock.Wait(0);
+        }
+        catch (ObjectDisposedException)
+        {
+            return false; // the asynchronous path reports it
+        }
+    }
+
+    private async ValueTask ReleaseWriteLockAfterAsync(ValueTask written)
+    {
+        try
+        {
+            await written.ConfigureAwait(false);
+        }
+        finally
+        {
+            _connection.WriteLock.Release();
+        }
+    }
+
     private async ValueTask AcquireWriteLockAsync(CancellationToken cancellationToken)
     {
         try
@@ -615,7 +871,8 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         _output.Write(_writeBuffer.WrittenSpan);
         if (result.Payload is not null)
             await StreamPayloadAsync(result, cancellationToken).ConfigureAwait(false);
-        await FlushAsync(cancellationToken).ConfigureAwait(false);
+        if (!TryDeferFlush(mode, result))
+            await FlushAsync(cancellationToken).ConfigureAwait(false);
         Volatile.Write(ref _lastWrite, _time.GetTimestamp());
         Metrics.Add(Metrics.MessagesSent, Protocol);
 
@@ -695,20 +952,87 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         }
     }
 
-    private async ValueTask FlushAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Under <see cref="FlushPolicy.WhileInputIsBuffered"/>, leaves a user write in the output buffer while the
+    /// next input is already buffered and no read is running; the reader flushes before it waits.
+    /// </summary>
+    private bool TryDeferFlush(WriteMode mode, in WriteResult result)
+    {
+        if (_definition.FlushPolicy != FlushPolicy.WhileInputIsBuffered || mode != WriteMode.User || result.CloseAfter
+            || Volatile.Read(ref _readInFlight) != 0 || !NextInputIsBuffered()
+            || !_output.CanGetUnflushedBytes || _output.UnflushedBytes > MaxDeferredFlushBytes)
+            return false;
+
+        // Pairs with EnterRead (both full fences): either this write sees a read that started meanwhile and
+        // flushes itself, or that read sees the flag and flushes before it waits.
+        Interlocked.Exchange(ref _flushDeferred, 1);
+        return Volatile.Read(ref _readInFlight) == 0;
+    }
+
+    // Bytes of the next message are already here: in the session's buffer, or behind a detached message and its payload.
+    private bool NextInputIsBuffered() => _hasBuffer ? !_buffer.IsEmpty : _payload.InputFollows(_inputAfterDetached);
+
+    private ValueTask FlushDeferredAsync(CancellationToken cancellationToken) =>
+        Volatile.Read(ref _flushDeferred) == 0 ? default : FlushDeferredLockedAsync(cancellationToken);
+
+    private async ValueTask FlushDeferredLockedAsync(CancellationToken cancellationToken)
+    {
+        await AcquireWriteLockAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (Volatile.Read(ref _flushDeferred) != 0)
+                await FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _connection.WriteLock.Release();
+        }
+    }
+
+    /// <summary>Flushes everything written so far, held-back output included. Called under the write lock.</summary>
+    private ValueTask FlushAsync(CancellationToken cancellationToken)
+    {
+        Volatile.Write(ref _flushDeferred, 0);
+        ValueTask<FlushResult> pending;
+        try
+        {
+            pending = _output.FlushAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            return ValueTask.FromException(Fault(new TransportException("Writing to the connection failed.", ex)));
+        }
+
+        if (!pending.IsCompletedSuccessfully)
+            return AwaitFlushAsync(pending);
+        return PeerStoppedReading(pending.Result) is { } failure ? ValueTask.FromException(failure) : default;
+    }
+
+    private async ValueTask AwaitFlushAsync(ValueTask<FlushResult> pending)
     {
         FlushResult flushed;
         try
         {
-            flushed = await _output.FlushAsync(cancellationToken).ConfigureAwait(false);
+            flushed = await pending.ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
             throw Fault(new TransportException("Writing to the connection failed.", ex));
         }
 
+        if (PeerStoppedReading(flushed) is { } failure)
+            throw failure;
+    }
+
+    private Exception? PeerStoppedReading(FlushResult flushed)
+    {
         if (flushed.IsCompleted)
-            throw Fault(new TransportException("The peer stopped reading.", new IOException("The reading side of the connection completed.")));
+            return Fault(new TransportException("The peer stopped reading.", new IOException("The reading side of the connection completed.")));
+
+        // Only the connection's disposal cancels a flush: the message may not have left.
+        if (flushed.IsCanceled)
+            return Fault(new TransportException("The connection was disposed while writing.", new IOException("The flush was cancelled.")));
+        return null;
     }
 
     private void ThrowIfNotWritable()
@@ -811,6 +1135,9 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         if (Interlocked.Exchange(ref _released, 1) != 0)
             return;
 
+        // Every message still referenced by the application turns stale before its memory goes back to a pool
+        // that other connections rent from.
+        _parser.Generation.Advance();
         _heartbeat?.Dispose();
         _timer.Dispose();
         _parser.Dispose();
@@ -871,6 +1198,27 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         }
     }
 
+    ValueTask IPayloadHost.FlushDeferredAsync(CancellationToken cancellationToken) => FlushDeferredAsync(cancellationToken);
+
+    bool IPayloadHost.IsTornDown => Volatile.Read(ref _tornDown) != 0;
+
+    /// <summary>A message the synchronous read path parsed but could not dispatch without waiting.</summary>
+    private readonly struct PendingParse
+    {
+        public PendingParse(ParseOutcome outcome, TIn message)
+        {
+            Outcome = outcome;
+            Message = message;
+            IsSet = true;
+        }
+
+        public ParseOutcome Outcome { get; }
+
+        public TIn? Message { get; }
+
+        public bool IsSet { get; }
+    }
+
     private sealed class ExceptionHolder(Exception exception)
     {
         public Exception Exception { get; } = exception;
@@ -892,18 +1240,26 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     {
         public TIn Current { get; private set; } = null!;
 
-        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-        public async ValueTask<bool> MoveNextAsync()
+        public ValueTask<bool> MoveNextAsync()
         {
             // A switch made inside the loop body ends the loop instead of failing it.
             if (session.Status == SessionStatus.Switched)
-                return false;
+                return new ValueTask<bool>(false);
 
-            ProtocolReadResult<TIn> result = await session.ReadAsync(cancellationToken).ConfigureAwait(false);
-            Current = result.Message!;
-            return !result.IsCompleted;
+            ValueTask<ProtocolReadResult<TIn>> read = session.ReadAsync(cancellationToken);
+            return read.IsCompletedSuccessfully ? new ValueTask<bool>(Accept(read.Result)) : AwaitAsync(read);
         }
 
         public ValueTask DisposeAsync() => default;
+
+        [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+        private async ValueTask<bool> AwaitAsync(ValueTask<ProtocolReadResult<TIn>> read) =>
+            Accept(await read.ConfigureAwait(false));
+
+        private bool Accept(ProtocolReadResult<TIn> result)
+        {
+            Current = result.Message!;
+            return !result.IsCompleted;
+        }
     }
 }

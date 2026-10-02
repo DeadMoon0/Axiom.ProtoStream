@@ -1,8 +1,10 @@
 using System;
+using System.Buffers;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading;
 using Axiom.ProtoStream.Errors;
 
 namespace Axiom.ProtoStream.Http;
@@ -14,6 +16,7 @@ namespace Axiom.ProtoStream.Http;
 public sealed class HttpResponse
 {
     private readonly string? _reasonPhrase;
+    private FrozenResponseHead? _frozenHead;
 
     /// <summary>Creates a response with the given status code and no content.</summary>
     public HttpResponse(int statusCode)
@@ -79,6 +82,34 @@ public sealed class HttpResponse
         return response;
     }
 
+    /// <summary>True once <see cref="Freeze"/> made the response immutable.</summary>
+    public bool IsFrozen => Volatile.Read(ref _frozenHead) is not null;
+
+    /// <summary>
+    /// Makes the response immutable and encodes its status line and fields once. A frozen response can be sent
+    /// any number of times, from any session and concurrently, without allocating or encoding its head again.
+    /// </summary>
+    /// <remarks>
+    /// <para>Freeze it before it is shared; afterwards <see cref="Headers"/> refuses changes. The memory behind
+    /// <see cref="Content"/> must not change either: it is sent as it is, to every peer.</para>
+    /// <para>The framing fields and <c>Date</c> are still written per request, so a frozen response stays correct
+    /// for HEAD, HTTP/1.0 and closing connections.</para>
+    /// </remarks>
+    /// <exception cref="ProtocolStateException">The response streams its content: a stream can be sent only once.</exception>
+    public HttpResponse Freeze()
+    {
+        if (IsFrozen)
+            return this;
+        if (ContentStream is not null)
+            throw new ProtocolStateException("A response with a ContentStream cannot be frozen: its stream can be sent only once.");
+
+        Headers.Freeze();
+        var head = new ArrayBufferWriter<byte>();
+        Http11ServerCodec.WriteHead(this, head);
+        Interlocked.CompareExchange(ref _frozenHead, new FrozenResponseHead(head.WrittenSpan.ToArray(), HasField("Date")), null);
+        return this;
+    }
+
     /// <summary>A response with only a status code.</summary>
     public static HttpResponse Status(int statusCode) => new(statusCode);
 
@@ -103,6 +134,8 @@ public sealed class HttpResponse
     public static HttpResponse ConnectionEstablished() => new(HttpStatus.Ok);
 
     internal string Reason => _reasonPhrase ?? HttpStatus.ReasonPhrase(StatusCode);
+
+    internal FrozenResponseHead? FrozenHead => Volatile.Read(ref _frozenHead);
 
     internal bool HasField(string name)
     {
@@ -131,6 +164,7 @@ public sealed class HttpResponse
 public sealed class HttpResponseHeaders : IEnumerable<KeyValuePair<string, string>>
 {
     private readonly List<KeyValuePair<string, string>> _fields = [];
+    private bool _frozen;
 
     /// <summary>Number of fields.</summary>
     public int Count => _fields.Count;
@@ -143,6 +177,7 @@ public sealed class HttpResponseHeaders : IEnumerable<KeyValuePair<string, strin
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(value);
+        ThrowIfFrozen();
         if (!HttpSyntax.IsToken(name))
             throw new ProtocolStateException($"'{name}' is not a valid header name.");
         if (!HttpSyntax.IsFieldValue(value))
@@ -160,7 +195,11 @@ public sealed class HttpResponseHeaders : IEnumerable<KeyValuePair<string, strin
     }
 
     /// <summary>Removes every field named <paramref name="name"/>.</summary>
-    public bool Remove(string name) => _fields.RemoveAll(f => f.Key.Equals(name, StringComparison.OrdinalIgnoreCase)) > 0;
+    public bool Remove(string name)
+    {
+        ThrowIfFrozen();
+        return _fields.RemoveAll(f => f.Key.Equals(name, StringComparison.OrdinalIgnoreCase)) > 0;
+    }
 
     /// <inheritdoc />
     public IEnumerator<KeyValuePair<string, string>> GetEnumerator() => _fields.GetEnumerator();
@@ -168,4 +207,20 @@ public sealed class HttpResponseHeaders : IEnumerable<KeyValuePair<string, strin
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
     internal List<KeyValuePair<string, string>> Fields => _fields;
+
+    internal void Freeze() => Volatile.Write(ref _frozen, true);
+
+    private void ThrowIfFrozen()
+    {
+        if (Volatile.Read(ref _frozen))
+            throw new ProtocolStateException("The response is frozen; its fields can no longer change.") { Guidance = "Build a new response, or change it before calling Freeze." };
+    }
+}
+
+/// <summary>The encoded status line and application fields of a frozen response.</summary>
+internal sealed class FrozenResponseHead(byte[] bytes, bool hasDate)
+{
+    public byte[] Bytes { get; } = bytes;
+
+    public bool HasDate { get; } = hasDate;
 }

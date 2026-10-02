@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Axiom.ProtoStream.Codecs;
+using Axiom.ProtoStream.Errors;
 
 namespace Axiom.ProtoStream.Internal;
 
@@ -23,6 +24,12 @@ internal interface IPayloadHost
 
     /// <summary>Writes raw bytes to the peer under the connection's write lock, before the payload is read.</summary>
     ValueTask WritePreambleAsync(ReadOnlyMemory<byte> preamble, CancellationToken cancellationToken);
+
+    /// <summary>Sends output held back by <see cref="FlushPolicy.WhileInputIsBuffered"/> before input is awaited.</summary>
+    ValueTask FlushDeferredAsync(CancellationToken cancellationToken);
+
+    /// <summary>True once the connection is being disposed; payload reads must not start any more.</summary>
+    bool IsTornDown { get; }
 }
 
 /// <summary>
@@ -42,12 +49,36 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
     private bool _dataPending;
     private bool _ended;
     private bool _completedByUser;
+    private bool _emptyPayload;
+    private bool _inputAfterEnd;
+    private int _outstanding;
 
     public bool IsActive => _decoder is not null && !_ended;
 
+    /// <summary>
+    /// True when the payload is over and the next input is already buffered behind it.
+    /// <paramref name="inputAfterMessage"/> says whether bytes followed the message itself, which decides for
+    /// messages without a payload or with an empty one.
+    /// </summary>
+    public bool InputFollows(bool inputAfterMessage) =>
+        _decoder is null || _emptyPayload ? inputAfterMessage : _ended && _inputAfterEnd;
+
     public void Bind(PipeReader inner) => _inner = inner;
 
-    public PipeReader Start(IPayloadDecoder decoder)
+    /// <summary>True between a read the application started and its AdvanceTo: it may still look at the buffer.</summary>
+    public bool HasOutstandingRead => Volatile.Read(ref _outstanding) != 0;
+
+    /// <summary>
+    /// Starts the next payload. The application gets a view bound to the message's <paramref name="stamp"/>, so a
+    /// body reader kept past the next read throws instead of reading the next message's payload.
+    /// </summary>
+    public PipeReader Start(IPayloadDecoder decoder, MessageStamp stamp)
+    {
+        StartCore(decoder);
+        return _emptyPayload ? EmptyPayloadReader.Instance : new PayloadView(this, stamp);
+    }
+
+    private void StartCore(IPayloadDecoder decoder)
     {
         if (IsActive)
             throw new InvalidOperationException("A payload was started while the previous one was still active.");
@@ -55,24 +86,47 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
         _ended = false;
         _dataPending = false;
         _completedByUser = false;
-        return this;
+        _inputAfterEnd = false;
+        _emptyPayload = EndsWithoutInput();
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     public override async ValueTask<ReadResult> ReadAsync(CancellationToken cancellationToken = default)
     {
-        if (_decoder is null || _completedByUser)
-            throw new InvalidOperationException("The payload can no longer be read: its message is over or reading was completed.");
-        if (_decoder is IPayloadPreamble waiting && waiting.TryTakePreamble(out ReadOnlyMemory<byte> preamble))
-            await host.WritePreambleAsync(preamble, cancellationToken).ConfigureAwait(false);
-        return await ReadCoreAsync(cancellationToken).ConfigureAwait(false);
+        BeginApplicationRead();
+        try
+        {
+            if (_decoder is IPayloadPreamble waiting && waiting.TryTakePreamble(out ReadOnlyMemory<byte> preamble))
+                await host.WritePreambleAsync(preamble, cancellationToken).ConfigureAwait(false);
+            return await ReadCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            Volatile.Write(ref _outstanding, 0);
+            throw;
+        }
     }
 
     public override bool TryRead(out ReadResult result)
     {
-        if (_decoder is null || _completedByUser)
-            throw new InvalidOperationException("The payload can no longer be read: its message is over or reading was completed.");
+        BeginApplicationRead();
+        try
+        {
+            if (TryReadCore(out result))
+                return true;
+        }
+        catch
+        {
+            Volatile.Write(ref _outstanding, 0);
+            throw;
+        }
 
+        Volatile.Write(ref _outstanding, 0);
+        return false;
+    }
+
+    private bool TryReadCore(out ReadResult result)
+    {
         if (_ended || EndsWithoutInput())
         {
             result = Ended();
@@ -100,17 +154,42 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
 
     public override void AdvanceTo(SequencePosition consumed, SequencePosition examined)
     {
-        if (!_dataPending)
-            return; // The last result was the end of the payload; the connection was already advanced.
+        try
+        {
+            if (!_dataPending)
+                return; // The last result was the end of the payload; the connection was already advanced.
 
-        _dataPending = false;
-        _decoder!.OnConsumed(_data.Slice(_data.Start, consumed).Length);
-        _inner!.AdvanceTo(consumed, examined);
+            _dataPending = false;
+            _decoder!.OnConsumed(_data.Slice(_data.Start, consumed).Length);
+            _inner!.AdvanceTo(consumed, examined);
+        }
+        finally
+        {
+            Volatile.Write(ref _outstanding, 0);
+        }
     }
 
     public override void CancelPendingRead() => _inner?.CancelPendingRead();
 
-    public override void Complete(Exception? exception = null) => _completedByUser = true;
+    public override void Complete(Exception? exception = null)
+    {
+        _completedByUser = true;
+        Volatile.Write(ref _outstanding, 0);
+    }
+
+    // Pairs with the session's teardown (both full fences): either the teardown sees this read and keeps the
+    // connection's buffers out of the shared pools, or this read sees the teardown and does not start.
+    private void BeginApplicationRead()
+    {
+        if (_decoder is null || _completedByUser)
+            throw new InvalidOperationException("The payload can no longer be read: its message is over or reading was completed.");
+        Interlocked.Exchange(ref _outstanding, 1);
+        if (host.IsTornDown)
+        {
+            Volatile.Write(ref _outstanding, 0);
+            throw new ProtocolStateException("The connection was disposed.");
+        }
+    }
 
     /// <summary>Discards whatever the user did not read of the current payload, up to <paramref name="limit"/> bytes.</summary>
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
@@ -137,6 +216,9 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
         _decoder = null;
     }
 
+    /// <summary>True while a message's payload is claimed and not yet fully read or drained.</summary>
+    public bool HasPayload => _decoder is not null;
+
     /// <summary>Forgets the payload without draining it, when the session is closing anyway.</summary>
     public void Abandon()
     {
@@ -159,7 +241,10 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
         {
             while (true)
             {
-                ReadResult read = await _inner!.ReadAsync(cancellationToken).ConfigureAwait(false);
+                ValueTask<ReadResult> pending = _inner!.ReadAsync(cancellationToken);
+                if (!pending.IsCompleted)
+                    await host.FlushDeferredAsync(cancellationToken).ConfigureAwait(false);
+                ReadResult read = await pending.ConfigureAwait(false);
                 if (read.IsCanceled)
                 {
                     _inner.AdvanceTo(read.Buffer.Start);
@@ -193,6 +278,7 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
                 return true;
 
             case PayloadStepKind.End:
+                _inputAfterEnd = buffer.Length > step.Skip;
                 _inner!.AdvanceTo(buffer.GetPosition(step.Skip));
                 result = Ended();
                 return true;
@@ -224,4 +310,83 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
         _dataPending = false;
         return new ReadResult(default, isCanceled: false, isCompleted: true);
     }
+}
+
+/// <summary>
+/// The application's handle on one payload. It turns stale with its message, so a body reader kept past the
+/// next read throws <see cref="StaleMessageException"/> instead of reading the payload of the next message.
+/// </summary>
+internal sealed class PayloadView(PayloadReader payload, MessageStamp stamp) : PipeReader
+{
+    public override ValueTask<ReadResult> ReadAsync(CancellationToken cancellationToken = default)
+    {
+        stamp.ThrowIfStale();
+        return payload.ReadAsync(cancellationToken);
+    }
+
+    public override bool TryRead(out ReadResult result)
+    {
+        stamp.ThrowIfStale();
+        return payload.TryRead(out result);
+    }
+
+    public override void AdvanceTo(SequencePosition consumed)
+    {
+        stamp.ThrowIfStale();
+        payload.AdvanceTo(consumed);
+    }
+
+    public override void AdvanceTo(SequencePosition consumed, SequencePosition examined)
+    {
+        stamp.ThrowIfStale();
+        payload.AdvanceTo(consumed, examined);
+    }
+
+    public override void CancelPendingRead()
+    {
+        if (stamp.IsCurrent)
+            payload.CancelPendingRead();
+    }
+
+    public override void Complete(Exception? exception = null)
+    {
+        if (stamp.IsCurrent)
+            payload.Complete(exception);
+    }
+}
+
+/// <summary>An empty payload: holds no connection memory, so one instance serves every message.</summary>
+internal sealed class EmptyPayloadReader : PipeReader
+{
+    public static EmptyPayloadReader Instance { get; } = new();
+
+    private EmptyPayloadReader()
+    {
+    }
+
+    public override ValueTask<ReadResult> ReadAsync(CancellationToken cancellationToken = default) => new(Ended);
+
+    public override bool TryRead(out ReadResult result)
+    {
+        result = Ended;
+        return true;
+    }
+
+    public override void AdvanceTo(SequencePosition consumed)
+    {
+    }
+
+    public override void AdvanceTo(SequencePosition consumed, SequencePosition examined)
+    {
+    }
+
+    public override void CancelPendingRead()
+    {
+    }
+
+    public override void Complete(Exception? exception = null)
+    {
+    }
+
+    private static ReadResult Ended => new(default, isCanceled: false, isCompleted: true);
 }

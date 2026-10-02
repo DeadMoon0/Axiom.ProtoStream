@@ -128,7 +128,7 @@ internal sealed class ShowcaseServer(IPEndPoint endpoint, LiveHub hub, Telemetry
             return page;
         }
 
-        return Json(HttpStatus.NotFound, new ErrorResult($"Nothing at {request.Path}."), ShowcaseJson.Default.ErrorResult);
+        return Json(HttpStatus.NotFound, new ErrorResult("Nothing here."), ShowcaseJson.Default.ErrorResult);
     }
 
     /// <summary>POST /api/messages: a JSON body read from the connection, then broadcast to every WebSocket.</summary>
@@ -188,7 +188,7 @@ internal sealed class ShowcaseServer(IPEndPoint endpoint, LiveHub hub, Telemetry
         for (int i = 0; i < request.Headers.Count; i++)
         {
             HttpHeader field = request.Headers[i];
-            headers.Add(new HeaderField(field.Name, field.Value));
+            headers.Add(new HeaderField(field.Name, IsCredential(field.Name) ? HiddenValue : field.Value));
         }
 
         return new InspectResult(
@@ -224,8 +224,21 @@ internal sealed class ShowcaseServer(IPEndPoint endpoint, LiveHub hub, Telemetry
         }
     }
 
-    private static HttpResponse Json<T>(int status, T value, JsonTypeInfo<T> type) =>
-        HttpResponse.Bytes(status, JsonSerializer.SerializeToUtf8Bytes(value, type), JsonContentType);
+    private static HttpResponse Json<T>(int status, T value, JsonTypeInfo<T> type)
+    {
+        HttpResponse response = HttpResponse.Bytes(status, JsonSerializer.SerializeToUtf8Bytes(value, type), JsonContentType);
+        response.Headers.Add("X-Content-Type-Options", "nosniff");
+        return response;
+    }
+
+    // The inspector shows how a request was parsed, not the caller's secrets: a page that echoes cookies and
+    // credentials hands them to any script that can make the browser call it.
+    private static bool IsCredential(string fieldName) =>
+        fieldName.Equals("Cookie", StringComparison.OrdinalIgnoreCase)
+        || fieldName.Equals("Authorization", StringComparison.OrdinalIgnoreCase)
+        || fieldName.Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase);
+
+    private const string HiddenValue = "(hidden)";
 
     private static HttpResponse MethodNotAllowed(string allowed)
     {

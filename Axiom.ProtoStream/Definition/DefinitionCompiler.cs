@@ -90,7 +90,7 @@ internal static class DefinitionCompiler
 
         return new ProtocolDefinition<TIn, TOut>(
             builder.Name, warnings, limits, codecFactory!, canResync, readers, states, start, inboundMap, outboundMap,
-            builder.ViolationAction, builder.ViolationReply, builder.CloseMessage, builder.HeartbeatInterval, builder.HeartbeatMessage);
+            builder.ViolationAction, builder.ViolationReply, builder.CloseMessage, builder.HeartbeatInterval, builder.HeartbeatMessage, builder.FlushPolicy);
     }
 
     private static Func<ICodec<TIn, TOut>>? CompileCodec<TIn, TOut>(ProtocolBuilder<TIn, TOut> builder, List<string> errors)

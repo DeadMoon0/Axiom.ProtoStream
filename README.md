@@ -84,6 +84,10 @@ await foreach (HttpRequest request in http.Messages.WithCancellation(ct))
 }
 ```
 
+A response sent again and again can be frozen once and shared by every connection: `HttpResponse.Text(...).Freeze()`
+encodes its head once and sends without allocating. For clients that pipeline, `Http11Options.CoalescePipelinedResponses`
+sends the responses to buffered requests with one flush.
+
 Two complete servers:
 
 - [Samples/Showcase](Samples/Showcase): **ProtoStream Live**, a web app with pages, a JSON API (GET and POST),

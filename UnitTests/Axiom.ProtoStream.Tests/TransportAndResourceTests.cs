@@ -186,6 +186,67 @@ public sealed class TransportAndResourceTests
         await echo.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
+    // Coalescing holds writes back only for the reading loop to flush; a write from another task while the
+    // reader waits for input would otherwise sit in the buffer until the peer sent something.
+    [Fact]
+    public async Task WithCoalescingAWriteWhileTheReaderWaitsIsStillFlushedAtOnce()
+    {
+        TransportPair transport = InMemoryTransport.CreatePair();
+        await using Connection connection = Connection.FromPipe(transport.Server);
+        Session<ToyMessage, ToyMessage> server = await connection.OpenAsync(Toy.Server().Flushing(FlushPolicy.WhileInputIsBuffered).Build(), Ct);
+        await transport.Client.Output.WriteAsync(Toy.HelloFrame("ada"));
+        await server.ReadAsync(Ct);
+
+        Task<ProtocolReadResult<ToyMessage>> waiting = server.ReadAsync(Ct).AsTask();
+        await server.WriteAsync(new Data { Payload = [5] }, Ct);
+
+        ReadResult read = await transport.Client.Input.ReadAsync(Ct).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(Toy.Frame(2, 5), read.Buffer.ToArray());
+        transport.Client.Input.AdvanceTo(read.Buffer.End);
+        Assert.False(waiting.IsCompleted);
+        await transport.Client.Output.CompleteAsync();
+        await waiting;
+    }
+
+    // Disposing while another task reads must not hand the session's buffers to the shared pools under the
+    // running read: the read ends first, then the buffers go back.
+    [Fact]
+    public async Task DisposingWhileAReadWaitsEndsTheReadAndThenReleases()
+    {
+        TransportPair transport = InMemoryTransport.CreatePair();
+        Connection connection = Connection.FromPipe(transport.Server);
+        Session<ToyMessage, ToyMessage> server = await connection.OpenAsync(Toy.Server().Build(), Ct);
+        await transport.Client.Output.WriteAsync(Toy.HelloFrame("ada"));
+        Hello hello = Assert.IsType<Hello>((await server.ReadAsync(Ct)).Message);
+        Task<ProtocolReadResult<ToyMessage>> waiting = server.ReadAsync(Ct).AsTask();
+
+        await connection.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True((await waiting.WaitAsync(TimeSpan.FromSeconds(10))).IsCompleted);
+        Assert.Equal(SessionStatus.Closed, server.Status);
+        Assert.True((await server.ReadAsync(Ct)).IsCompleted);
+        Assert.Equal("ada", hello.Name); // owned message, not pooled: unaffected
+    }
+
+    // A write stuck on a peer that stopped reading must fail when the connection is disposed, never report
+    // success for bytes that did not leave, and never see its buffers released underneath it.
+    [Fact]
+    public async Task DisposingWhileAWriteIsStuckFailsTheWrite()
+    {
+        TransportPair transport = InMemoryTransport.CreatePair(new PipeOptions(pauseWriterThreshold: 1024, resumeWriterThreshold: 512, useSynchronizationContext: false));
+        Connection connection = Connection.FromPipe(transport.Server);
+        Session<ToyMessage, ToyMessage> server = await connection.OpenAsync(Toy.Server().Build(), Ct);
+        await transport.Client.Output.WriteAsync(Toy.HelloFrame("ada"));
+        await server.ReadAsync(Ct);
+        Task stuck = server.WriteAsync(new Data { Payload = new byte[4000] }, Ct).AsTask();
+        Assert.False(stuck.IsCompleted);
+
+        await connection.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.ThrowsAsync<Errors.TransportException>(() => stuck.WaitAsync(TimeSpan.FromSeconds(10)));
+        await Assert.ThrowsAsync<Errors.ProtocolStateException>(() => server.WriteAsync(new Data { Payload = [1] }, Ct).AsTask());
+    }
+
     private sealed class Note : ToyMessage
     {
         public required string Text { get; init; }

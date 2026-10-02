@@ -31,6 +31,13 @@ public sealed class Http11Options
 
     /// <summary>Clock for the Date field every response carries (RFC 9110 section 6.6.1).</summary>
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
+    /// <summary>
+    /// Sends the responses to pipelined requests together: a response written while the next request is already
+    /// buffered waits for the next flush (see <see cref="FlushPolicy.WhileInputIsBuffered"/>). Saves one transport
+    /// write per pipelined request; a slow handler then also delays the responses before it. Off by default.
+    /// </summary>
+    public bool CoalescePipelinedResponses { get; init; }
 }
 
 /// <summary>HTTP/1.1 protocol definitions.</summary>
@@ -72,6 +79,7 @@ public static class Http11
                 .MaxBufferedBytes(options.MaxRequestHeadBytes + BufferHeadroom)
                 .MaxPayloadDrain(options.MaxUnreadBodyDrain))
             .ReplyToViolations(ReplyTo)
+            .Flushing(options.CoalescePipelinedResponses ? FlushPolicy.WhileInputIsBuffered : FlushPolicy.EveryWrite)
             .Build();
     }
 

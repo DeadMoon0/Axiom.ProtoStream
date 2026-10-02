@@ -100,7 +100,16 @@ public sealed class LiveHub(Telemetry telemetry)
 
     private async Task OnTextAsync(Session<WsMessage, WsMessage> session, WsText text)
     {
-        Envelope? envelope = JsonSerializer.Deserialize(text.Utf8.Span, ShowcaseJson.Default.Envelope);
+        Envelope? envelope;
+        try
+        {
+            envelope = JsonSerializer.Deserialize(text.Utf8.Span, ShowcaseJson.Default.Envelope);
+        }
+        catch (JsonException)
+        {
+            return; // not one of ours; ignored
+        }
+
         switch (envelope?.Type)
         {
             // Latency probes are answered to the sender only, unchanged.
@@ -108,13 +117,25 @@ public sealed class LiveHub(Telemetry telemetry)
                 await session.WriteAsync(text, CancellationToken.None);
                 break;
             case "chat":
-                ClientChat? chat = JsonSerializer.Deserialize(text.Utf8.Span, ShowcaseJson.Default.ClientChat);
+                ClientChat? chat = TryRead(text, ShowcaseJson.Default.ClientChat);
                 if (chat is not null && Validation.TryChat(chat.Name, chat.Text, out string name, out string body))
                     await PostChatAsync(name, body);
                 break;
             case "clear":
                 await BroadcastAsync(Text(new ClearEvent("clear"), ShowcaseJson.Default.ClearEvent), except: null);
                 break;
+        }
+    }
+
+    private static T? TryRead<T>(WsText text, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> type) where T : class
+    {
+        try
+        {
+            return JsonSerializer.Deserialize(text.Utf8.Span, type);
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
@@ -132,9 +153,10 @@ public sealed class LiveHub(Telemetry telemetry)
         {
             await session.WriteAsync(message, cancellationToken);
         }
-        catch (Exception ex) when (ex is ProtoStreamException or OperationCanceledException)
+        catch (Exception)
         {
-            _clients.TryRemove(id, out _); // closed, faulted or too slow
+            // Closed, faulted, disposed or too slow: the client is dropped, the broadcast to the others goes on.
+            _clients.TryRemove(id, out _);
         }
     }
 

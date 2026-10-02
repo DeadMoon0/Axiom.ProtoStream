@@ -96,7 +96,14 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
     private readonly WsPing[] _pings = [new(), new()];
     private readonly WsPong[] _pongs = [new(), new()];
     private readonly WsClose[] _closes = [new(), new()];
-    private int _next;
+
+    // One rotation per kind: a kind that is answered by the framework (a ping) must not advance the rotation of
+    // the kinds the application holds, or the previous text would be reused while still valid.
+    private int _nextText;
+    private int _nextBinary;
+    private int _nextPing;
+    private int _nextPong;
+    private int _nextClose;
     private WsOpcode? _fragmentedOpcode;
 
     /// <summary>Bytes of the text being assembled already proven to be complete, valid UTF-8.</summary>
@@ -247,12 +254,12 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
         ReadOnlyMemory<byte> data = _message.Memory;
         if (isText)
         {
-            WsText text = _texts[_next ^= 1];
+            WsText text = _texts[_nextText ^= 1];
             text.Load(data, stamp);
             return text;
         }
 
-        WsBinary binary = _binaries[_next ^= 1];
+        WsBinary binary = _binaries[_nextBinary ^= 1];
         binary.Load(data, stamp);
         return binary;
     }
@@ -345,12 +352,12 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
         switch (opcode)
         {
             case WsOpcode.Ping:
-                WsPing ping = _pings[_next ^= 1];
+                WsPing ping = _pings[_nextPing ^= 1];
                 ping.Load(memory, context.Stamp);
                 message = ping;
                 break;
             case WsOpcode.Pong:
-                WsPong pong = _pongs[_next ^= 1];
+                WsPong pong = _pongs[_nextPong ^= 1];
                 pong.Load(memory, context.Stamp);
                 message = pong;
                 break;
@@ -370,7 +377,7 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
                     reason = Encoding.UTF8.GetString(reasonBytes);
                 }
 
-                WsClose close = _closes[_next ^= 1];
+                WsClose close = _closes[_nextClose ^= 1];
                 close.Load(code, reason, context.Stamp);
                 message = close;
                 break;

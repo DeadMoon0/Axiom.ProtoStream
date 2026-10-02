@@ -159,6 +159,30 @@ public class SessionRoundTripBenchmarks
     }
 
     [Benchmark(OperationsPerInvoke = Messages)]
+    public Task<int> HttpPipelinedFrozenResponse() => AnswerAsync(Http11.Server(), Hello);
+
+    [Benchmark(OperationsPerInvoke = Messages)]
+    public Task<int> HttpPipelinedFrozenCoalesced() => AnswerAsync(Coalescing, Hello);
+
+    private static readonly HttpResponse Hello = HttpResponse.Text(HttpStatus.Ok, "hello").Freeze();
+
+    private static readonly ProtocolDefinition<HttpRequest, HttpResponse> Coalescing = Http11.Server(new Http11Options { CoalescePipelinedResponses = true });
+
+    private async Task<int> AnswerAsync(ProtocolDefinition<HttpRequest, HttpResponse> definition, HttpResponse response)
+    {
+        await using Connection connection = await OpenAsync(_requests);
+        Session<HttpRequest, HttpResponse> http = await connection.OpenAsync(definition, CancellationToken.None);
+        int answered = 0;
+        await foreach (HttpRequest request in http.Messages)
+        {
+            await http.WriteAsync(response, CancellationToken.None);
+            answered++;
+        }
+
+        return answered;
+    }
+
+    [Benchmark(OperationsPerInvoke = Messages)]
     public async Task<int> WebSocketEcho()
     {
         await using Connection connection = await OpenAsync(_frames);

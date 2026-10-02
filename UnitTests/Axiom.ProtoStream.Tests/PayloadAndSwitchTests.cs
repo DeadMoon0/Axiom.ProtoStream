@@ -138,7 +138,8 @@ public sealed class PayloadAndSwitchTests
 
         var blob = Assert.IsType<Blob>((await server.ReadAsync(Ct)).Message);
         Assert.Equal("after", Assert.IsType<Note>((await server.ReadAsync(Ct)).Message).Text);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => blob.Body.ReadAsync().AsTask());
+        // The body reader belongs to its message: kept past the next read it throws instead of reading on.
+        await Assert.ThrowsAsync<StaleMessageException>(() => blob.Body.ReadAsync().AsTask());
     }
 
     [Fact]

@@ -62,6 +62,9 @@ public interface IPolicyStage<TIn, TOut>
     /// </summary>
     IPolicyStage<TIn, TOut> Heartbeat(TimeSpan interval, Func<TOut> message);
 
+    /// <summary>When written messages reach the transport. The default is <see cref="FlushPolicy.EveryWrite"/>.</summary>
+    IPolicyStage<TIn, TOut> Flushing(FlushPolicy policy);
+
     /// <summary>Validates and compiles the description. Throws <see cref="Errors.ProtocolDefinitionException"/> listing every problem.</summary>
     ProtocolDefinition<TIn, TOut> Build();
 
@@ -74,6 +77,24 @@ public sealed class ProtocolBuildOptions
 {
     /// <summary>Treat every definition warning as an error, for example in CI.</summary>
     public bool WarningsAsErrors { get; init; }
+}
+
+/// <summary>When written messages are flushed to the transport.</summary>
+public enum FlushPolicy
+{
+    /// <summary>Every write is flushed before it completes.</summary>
+    EveryWrite,
+
+    /// <summary>
+    /// A write made while further input is already buffered (a pipelined request) stays in the output buffer, up
+    /// to 64 KiB, and goes out with the next flush: at the latest when the session waits for input, closes or
+    /// switches. Answers to pipelined messages then share one transport write.
+    /// </summary>
+    /// <remarks>
+    /// The trade-off: while the application works on the next buffered message, the answers to earlier ones wait
+    /// for it. Use it where answers are produced quickly, such as HTTP/1.1 servers facing pipelining clients.
+    /// </remarks>
+    WhileInputIsBuffered,
 }
 
 /// <summary>What a session does with a violation that its reader can skip.</summary>

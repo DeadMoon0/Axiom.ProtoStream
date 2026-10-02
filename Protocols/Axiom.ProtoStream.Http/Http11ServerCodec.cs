@@ -117,12 +117,13 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
         bool close = !informational && !tunnel && (response.CloseConnection || !_lastKeepAlive || _body.IsWaiting);
         bool chunked = false;
 
-        WriteStatusLine(status, response.Reason, output);
-        foreach (KeyValuePair<string, string> field in response.Headers.Fields)
-            WriteField(field.Key, field.Value, output);
+        if (response.FrozenHead is { } frozen)
+            output.Write(frozen.Bytes);
+        else
+            WriteHead(response, output);
 
         // RFC 9110 section 6.6.1: an origin server with a clock MUST send Date in 2xx, 3xx and 4xx responses.
-        if (!informational && !response.HasField("Date"))
+        if (!informational && !(response.FrozenHead?.HasDate ?? response.HasField("Date")))
             WriteDate(output);
 
         if (!bodiless)
@@ -559,6 +560,14 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
         output.Write(HttpGrammar.FieldSeparator);
         output.Write(_date);
         output.Write(HttpGrammar.Crlf);
+    }
+
+    /// <summary>The status line and the application's fields: everything of the head that does not depend on the request.</summary>
+    internal static void WriteHead(HttpResponse response, IBufferWriter<byte> output)
+    {
+        WriteStatusLine(response.StatusCode, response.Reason, output);
+        foreach (KeyValuePair<string, string> field in response.Headers.Fields)
+            WriteField(field.Key, field.Value, output);
     }
 
     private static void WriteStatusLine(int status, string reason, IBufferWriter<byte> output)

@@ -100,15 +100,20 @@ Outbound: `OnSend<T>()` declares what the user may write in a state; `GoTo`/`GoT
 
 ```
 ReadAsync
- ├ release the previous message: advance the pipe, drain an unread payload (bounded)
- ├ bump the read generation (pooled messages of the previous read become stale)
- ├ arm the message timeout (first-message or idle)
- ├ loop: pipe.ReadAsync → reader(state).TryParse → contract checks
+ ├ synchronous path, while the bytes of the last pipe read hold another message and no payload is pending:
+ │    bump the read generation → parse → transition without a write (Delegate: return, Wait: next)
+ │    anything that needs to wait (a reply, OnEnter, a violation, more input) hands over to:
+ ├ release the previous message: drain an unread payload (bounded), bump the read generation
+ ├ loop: parse the buffered bytes; when they are used up:
+ │    flush output held back by FlushPolicy.WhileInputIsBuffered, arm the message timeout, pipe.ReadAsync
  │    NeedMore → advance what the reader took, check MaxBufferedBytes, wait
  │    Invalid  → skip when the policy and the reader allow it, else reply (optional) and fault
  │    Done     → transition by message type: Wait / Respond / Delegate (return)
  └ disarm the timeout
 ```
+
+A read of a message that is already buffered completes synchronously and allocates nothing; a write that finds
+the write lock free and flushes synchronously does too.
 
 ## 7. Cross-cutting concepts
 
@@ -122,6 +127,10 @@ ReadAsync
 - Pooled messages carry a `MessageStamp` and rotate two instances, so a message kept past the next read throws
   `StaleMessageException`; `Retain()` returns an owned copy.
 - Every outgoing message is encoded completely before a byte reaches the wire.
+- Releasing a session (switch, disposal) advances its read generation before its buffers go back to the pools;
+  disposal stops running reads and writes first. See [SECURITY.md](SECURITY.md#isolation-between-connections).
+- `FlushPolicy.WhileInputIsBuffered` keeps a user write in the output buffer while the next input is already
+  there; the session flushes before it waits for input, closes or switches, so held output never waits on the peer.
 - WebSocket frame payloads are consumed as they arrive, so a frame never has to sit whole in the pipe.
 
 ### Errors

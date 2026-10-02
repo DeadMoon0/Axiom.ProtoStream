@@ -240,6 +240,27 @@ public sealed class WebSocketTests
         Assert.Equal("Hello", Assert.IsType<WsText>(server.Decode(new ReadOnlySequence<byte>(second.WrittenMemory), true).Message).Text);
     }
 
+    // A ping the framework answers between two texts must not move the texts' rotation: the second text would
+    // land in the object the application still holds for the first, which then shows new content without
+    // throwing.
+    [Fact]
+    public async Task APingBetweenTwoTextsLeavesTheFirstTextStale()
+    {
+        await using WsPair ws = await WsPair.OpenAsync();
+        await ws.SendAsync(
+            ClientFrame(Fin | TextOpcode, "one"u8.ToArray()),
+            ClientFrame(Fin | PingOpcode, []),
+            ClientFrame(Fin | TextOpcode, "two"u8.ToArray()));
+        WsText first = Assert.IsType<WsText>((await ws.Session.ReadAsync(Ct)).Message);
+        Assert.Equal("one", first.Text);
+
+        WsText second = Assert.IsType<WsText>((await ws.Session.ReadAsync(Ct)).Message);
+
+        Assert.Equal("two", second.Text);
+        Assert.NotSame(first, second);
+        Assert.Throws<StaleMessageException>(() => first.Text);
+    }
+
     // Control frames may be injected between the fragments of a message (section 5.4).
     [Fact]
     public async Task APingBetweenFragmentsIsAnsweredWhileTheMessageAssembles()
