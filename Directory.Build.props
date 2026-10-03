@@ -40,6 +40,7 @@
     <PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
     <RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>Icon.png</PackageIcon>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -58,6 +59,8 @@
   <ItemGroup Condition="'$(IsLibrary)' == 'true'">
     <!-- Each package ships its own README next to its csproj. -->
     <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="\" Condition="Exists('$(MSBuildProjectDirectory)/README.md')" />
+    <!-- The Axiom family icon, the same file the Axiom repository packs. -->
+    <None Include="$(MSBuildThisFileDirectory)Assets/Icon.png" Pack="true" PackagePath="\" Visible="false" />
     <!-- Marker attribute the PublicSurface convention test reads; compiled into every library. -->
     <Compile Include="$(MSBuildThisFileDirectory)Shared/ClosedShapeAttribute.cs" Link="Shared/ClosedShapeAttribute.cs" />
     <!-- Internals are open to the package's own test project only. -->

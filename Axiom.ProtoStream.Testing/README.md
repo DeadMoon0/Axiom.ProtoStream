@@ -1,3 +1,5 @@
+![Icon](https://raw.githubusercontent.com/DeadMoon0/Axiom/refs/heads/main/Assets/Icon.svg)
+
 # Axiom.ProtoStream.Testing
 
 Test harnesses for [Axiom.ProtoStream](https://www.nuget.org/packages/Axiom.ProtoStream) protocol authors. Framework

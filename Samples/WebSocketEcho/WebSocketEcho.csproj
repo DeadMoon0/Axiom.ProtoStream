@@ -5,6 +5,7 @@
     <RootNamespace>WebSocketEcho</RootNamespace>
     <!-- Builds with the AOT and trim analyzers on; `dotnet publish -r <rid>` produces a native executable. -->
     <PublishAot>true</PublishAot>
+    <ApplicationIcon>..\..\Assets\Icon.ico</ApplicationIcon>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 

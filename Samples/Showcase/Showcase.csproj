@@ -5,6 +5,7 @@
     <RootNamespace>Showcase</RootNamespace>
     <!-- Builds with the AOT and trim analyzers on; `dotnet publish -r <rid>` produces a native executable. -->
     <PublishAot>true</PublishAot>
+    <ApplicationIcon>..\..\Assets\Icon.ico</ApplicationIcon>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
@@ -15,6 +16,7 @@
   <ItemGroup>
     <!-- The web app ships inside the executable: one file to run, nothing to deploy beside it. -->
     <EmbeddedResource Include="wwwroot\*" LogicalName="wwwroot/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\..\Assets\Icon.svg" LogicalName="wwwroot/favicon.svg" />
   </ItemGroup>
 
 </Project>

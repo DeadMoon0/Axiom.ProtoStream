@@ -1,3 +1,5 @@
+![Icon](https://raw.githubusercontent.com/DeadMoon0/Axiom/refs/heads/main/Assets/Icon.svg)
+
 # Axiom.ProtoStream.WebSockets
 
 RFC 6455 WebSockets for [Axiom.ProtoStream](https://www.nuget.org/packages/Axiom.ProtoStream), and the HTTP/1.1 upgrade that

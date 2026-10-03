@@ -1,3 +1,5 @@
+![Icon](https://raw.githubusercontent.com/DeadMoon0/Axiom/refs/heads/main/Assets/Icon.svg)
+
 # Axiom.ProtoStream
 
 Describe a network protocol once — framing, messages, state machine, limits, lifecycle — and run it
