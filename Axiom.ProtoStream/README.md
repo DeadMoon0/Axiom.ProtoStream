@@ -35,4 +35,4 @@ await foreach (ChatMessage message in session.Messages.WithCancellation(ct))
 
 The steady state reads without allocating, and the framework never schedules work on its own.
 
-See the [repository](https://github.com/DeadMoon0/ProtoStream) for the architecture, security and error docs.
+See the [repository](https://github.com/DeadMoon0/Axiom.ProtoStream) for the architecture, security and error docs.

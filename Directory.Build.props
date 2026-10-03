@@ -37,8 +37,8 @@
     <Authors>DeadMoon0</Authors>
     <Copyright>Copyright (c) DeadMoon0 2026</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/DeadMoon0/ProtoStream</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/DeadMoon0/ProtoStream.git</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
