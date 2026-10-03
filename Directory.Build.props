@@ -27,20 +27,14 @@
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
   </PropertyGroup>
 
-  <!-- Shipped libraries: part of the Axiom family, documented, trimmable, AOT-safe, packed with symbols and SourceLink. -->
+  <!--
+    Shipped libraries: trimmable, AOT-safe, packed with symbols and SourceLink. The package metadata itself
+    (title, description, version, icon, readme, urls, release notes) lives in each library's csproj.
+  -->
   <PropertyGroup Condition="'$(IsLibrary)' == 'true'">
     <IsPackable>true</IsPackable>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsTrimmable>true</IsTrimmable>
     <IsAotCompatible>true</IsAotCompatible>
-
-    <Authors>DeadMoon0</Authors>
-    <Copyright>Copyright (c) DeadMoon0 2026</Copyright>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
-    <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageIcon>Icon.png</PackageIcon>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -57,14 +51,8 @@
   </PropertyGroup>
 
   <ItemGroup Condition="'$(IsLibrary)' == 'true'">
-    <!-- Each package ships its own README next to its csproj. -->
-    <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="\" Condition="Exists('$(MSBuildProjectDirectory)/README.md')" />
-    <!-- The Axiom family icon, the same file the Axiom repository packs. -->
-    <None Include="$(MSBuildThisFileDirectory)Assets/Icon.png" Pack="true" PackagePath="\" Visible="false" />
     <!-- Marker attribute the PublicSurface convention test reads; compiled into every library. -->
     <Compile Include="$(MSBuildThisFileDirectory)Shared/ClosedShapeAttribute.cs" Link="Shared/ClosedShapeAttribute.cs" />
-    <!-- Internals are open to the package's own test project only. -->
-    <InternalsVisibleTo Include="$(MSBuildProjectName).Tests" />
   </ItemGroup>
 
   <!-- Test projects: xunit, the shared fixtures (a toy protocol, conventions) and the testing harness. -->

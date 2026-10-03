@@ -1,15 +1,47 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <Version>0.1.0</Version>
-    <Description>Part of the Axiom family. Test harnesses for Axiom.ProtoStream protocol authors: codec round-trips across every segment boundary, seeded mutation fuzzing with a hang watchdog, definition lint assertions, pooled-message reset checks and in-memory transports. Test-framework agnostic.</Description>
-    <PackageTags>Axiom;ProtoStream;protocol;pipelines;testing;fuzzing;codec</PackageTags>
-    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
-  </PropertyGroup>
+	<PropertyGroup>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<Title>Axiom.ProtoStream.Testing</Title>
+		<Authors>DeadMoon0</Authors>
+		<Product>Axiom</Product>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageTags>Axiom;ProtoStream;protocol;pipelines;testing;fuzzing;codec</PackageTags>
+		<PackageIcon>Icon.png</PackageIcon>
+		<Description>Test harnesses for Axiom.ProtoStream protocol authors: codec round-trips across every segment boundary, seeded mutation fuzzing with a hang watchdog, definition lint assertions, pooled-message reset checks and in-memory transports. Test-framework agnostic.</Description>
+		<Version>0.1.0</Version>
+		<PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<Copyright>Copyright (c) DeadMoon0 2026</Copyright>
+		<PackageReleaseNotes>The first preview: codec round-trips at every segment boundary, seeded mutation fuzzing with a hang watchdog, definition lint assertions, message reuse checks and in-memory transports.</PackageReleaseNotes>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\Axiom.ProtoStream\Axiom.ProtoStream.csproj" />
-    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
-  </ItemGroup>
+	<ItemGroup>
+		<None Include="..\Assets\Icon.png">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- The package's own test project, and nobody else. -->
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+			<_Parameter1>Axiom.ProtoStream.Testing.Tests</_Parameter1>
+		</AssemblyAttribute>
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\Axiom.ProtoStream\Axiom.ProtoStream.csproj" />
+		<PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="README.md">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
 
 </Project>

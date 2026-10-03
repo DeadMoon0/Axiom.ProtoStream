@@ -1,15 +1,47 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <Version>0.1.0</Version>
-    <Description>Part of the Axiom family. Describe a network protocol once (framing, messages, state machine, limits, lifecycle) and run it over any Stream or IDuplexPipe. Built on System.IO.Pipelines: zero-copy parsing, allocation-free steady state, protocol switching, typed sessions consumed with await foreach.</Description>
-    <PackageTags>Axiom;ProtoStream;protocol;pipelines;networking;framing;codec;state-machine;binary;tcp</PackageTags>
-    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
-  </PropertyGroup>
+	<PropertyGroup>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<Title>Axiom.ProtoStream</Title>
+		<Authors>DeadMoon0</Authors>
+		<Product>Axiom</Product>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageTags>Axiom;ProtoStream;protocol;pipelines;networking;framing;codec;state-machine;binary;tcp</PackageTags>
+		<PackageIcon>Icon.png</PackageIcon>
+		<Description>Describe a network protocol once (framing, messages, state machine, limits, lifecycle) and run it over any Stream or IDuplexPipe. Built on System.IO.Pipelines: zero-copy parsing, allocation-free steady state, protocol switching, typed sessions consumed with await foreach.</Description>
+		<Version>0.1.0</Version>
+		<PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<Copyright>Copyright (c) DeadMoon0 2026</Copyright>
+		<PackageReleaseNotes>The first preview: protocol description with build-time validation and a definition linter; framing, message sets and Wire serialization; connections over Stream, stream pairs and IDuplexPipe; sessions read with await foreach, protocol switching, payload streaming; timeouts, minimum data rates, buffer and drain limits, a budget for automatic replies; pooled, stamped messages that refuse use after their lifetime.</PackageReleaseNotes>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <!-- In-box from net10.0 on; a package reference there is pruned and warns. -->
-    <PackageReference Include="System.IO.Pipelines" Condition="'$(TargetFramework)' == 'net8.0'" />
-  </ItemGroup>
+	<ItemGroup>
+		<None Include="..\Assets\Icon.png">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- The package's own test project, and nobody else. -->
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+			<_Parameter1>Axiom.ProtoStream.Tests</_Parameter1>
+		</AssemblyAttribute>
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- In-box from net10.0 on; a package reference there is pruned and warns. -->
+		<PackageReference Include="System.IO.Pipelines" Condition="'$(TargetFramework)' == 'net8.0'" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="README.md">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
 
 </Project>

@@ -1,14 +1,46 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <Version>0.1.0</Version>
-    <Description>Part of the Axiom family. RFC 6455 WebSockets for Axiom.ProtoStream: server and client roles with fragmentation, control frames, incremental UTF-8 validation and the close handshake, plus the HTTP/1.1 upgrade from an Axiom.ProtoStream.Http session.</Description>
-    <PackageTags>Axiom;ProtoStream;protocol;pipelines;websocket;rfc6455;networking</PackageTags>
-    <PackageReleaseNotes>First preview.</PackageReleaseNotes>
-  </PropertyGroup>
+	<PropertyGroup>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<Title>Axiom.ProtoStream.WebSockets</Title>
+		<Authors>DeadMoon0</Authors>
+		<Product>Axiom</Product>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageTags>Axiom;ProtoStream;protocol;pipelines;websocket;rfc6455;networking</PackageTags>
+		<PackageIcon>Icon.png</PackageIcon>
+		<Description>RFC 6455 WebSockets for Axiom.ProtoStream: server and client roles with fragmentation, control frames, incremental UTF-8 validation and the close handshake, plus the HTTP/1.1 upgrade from an Axiom.ProtoStream.Http session.</Description>
+		<Version>0.1.0</Version>
+		<PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<Copyright>Copyright (c) DeadMoon0 2026</Copyright>
+		<PackageReleaseNotes>The first preview: RFC 6455 server and client roles, the HTTP/1.1 upgrade, fragmentation, control frames, incremental UTF-8 validation and the close handshake. Autobahn testsuite: 301 cases, 298 OK, 3 informational, none failed.</PackageReleaseNotes>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\Axiom.ProtoStream.Http\Axiom.ProtoStream.Http.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<None Include="..\..\Assets\Icon.png">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- The package's own test project, and nobody else. -->
+		<AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+			<_Parameter1>Axiom.ProtoStream.WebSockets.Tests</_Parameter1>
+		</AssemblyAttribute>
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\Axiom.ProtoStream.Http\Axiom.ProtoStream.Http.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="README.md">
+			<Pack>True</Pack>
+			<PackagePath>\</PackagePath>
+		</None>
+	</ItemGroup>
 
 </Project>
