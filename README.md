@@ -1,4 +1,4 @@
-# ProtoStream
+# Axiom.ProtoStream
 
 Describe a network protocol once — framing, messages, state machine, limits, lifecycle — and run it
 over any `Stream` or `IDuplexPipe`. The framework drives the connection; your code sees only the messages
@@ -22,7 +22,17 @@ Benchmarks/, Samples/
 | `Axiom.ProtoStream.WebSockets` | WebSockets (RFC 6455) and the HTTP upgrade into them. |
 | `Axiom.ProtoStream.Testing` | Harnesses for protocol authors: round-trips at every split, fuzzing, lint assertions, in-memory transports. |
 
-Targets .NET 8 and .NET 10. Trimming and Native AOT compatible. No dependencies beyond `System.IO.Pipelines`.
+Targets .NET 8 and .NET 10. Trimming- and AOT-safe: the libraries build without warnings from the .NET trim and
+AOT analyzers. No dependencies beyond `System.IO.Pipelines`.
+
+## Install
+
+```bash
+dotnet add package Axiom.ProtoStream.WebSockets
+```
+
+`Axiom.ProtoStream.WebSockets` brings `Axiom.ProtoStream.Http` and the core with it; add only
+`Axiom.ProtoStream` for your own protocols, and `Axiom.ProtoStream.Testing` to your test projects.
 
 ## Quickstart: a binary protocol
 
@@ -95,13 +105,22 @@ Two complete servers:
 - [Samples/WebSocketEcho](Samples/WebSocketEcho): the minimal HTTP-to-WebSocket echo used for the Autobahn
   conformance run.
 
+## Security
+
+Every limit has a safe default: timeouts per message, minimum data rates against slow peers, buffer and drain
+limits, a budget for automatic replies. Anything an RFC calls ambiguous is refused, and the HTTP and WebSocket
+codecs are tested against the attack inputs of published CVEs in comparable servers. Report vulnerabilities as
+described in [SECURITY.md](SECURITY.md).
+
 ## Documentation
 
 - [Architecture](Documentation/Arc42.md): layers, runtime, memory model, decisions.
-- [Spec compliance](Documentation/COMPLIANCE.md): every RFC requirement and the test that proves it.
-- [Security](Documentation/SECURITY.md): threat model, defaults, what the host still has to do.
+- [Spec compliance](Documentation/COMPLIANCE.md): every RFC requirement and the test that proves it, and the
+  Autobahn WebSocket result.
+- [Security](Documentation/SECURITY.md): threat model, defaults, isolation between connections, known attacks,
+  what the host still has to do.
 - [Errors](Documentation/ERROR-HANDLING.md): what each exception means and what to do.
 
 ## Status
 
-Preview (0.x). The public API may still change between minor versions.
+Preview (0.x), not yet published to NuGet. The public API may still change between minor versions.

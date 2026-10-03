@@ -23,6 +23,10 @@ await foreach (HttpRequest request in http.Messages.WithCancellation(ct))
 - `Content-Length`, `Transfer-Encoding`, `Connection` and `Date` are derived by the framework, never contradicting the body.
 - Keep-alive, pipelining, `Expect: 100-continue`, interim responses, `Upgrade` (101) and `CONNECT` tunnels.
 - Anything RFC 9112 calls ambiguous — the basis of request smuggling — is refused with the right status code.
+- Minimum data rates for request bodies and responses (240 bytes/s after 5 s by default) stop slow POST and
+  slow read; chunk extensions, trailers and chunk framing are bounded.
+- `HttpResponse.Freeze()` makes a response immutable and shareable by every connection; its head is encoded once.
+- `Http11Options.CoalescePipelinedResponses` sends the responses to pipelined requests with one flush.
 - Status codes are named constants in `HttpStatus`.
 
 HTTP/2 and HTTP/3 are not part of this package.

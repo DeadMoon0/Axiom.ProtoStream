@@ -19,3 +19,5 @@ DefinitionAssert.NoWarnings(definition);
 
 Transports for session tests: `InMemoryTransport.CreatePair()` (cross-wired pipes) and `ScriptedTransport`
 (input delivered in chosen chunks, each a separate buffer segment, output captured).
+
+The built-in HTTP and WebSocket packages are tested with these same harnesses.

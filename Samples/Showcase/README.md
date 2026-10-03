@@ -37,5 +37,5 @@ Wrong methods get 405 with an `Allow` field; unknown paths 404.
 
 - Browsers open spare connections they may never use. ProtoStream closes them after the 30-second
   first-message timeout; the pulse counts them under "violations & timeouts".
-- The app is source-generated JSON and embedded files, so it publishes as Native AOT:
-  `dotnet publish Samples/Showcase -c Release -r win-x64`.
+- The app uses source-generated JSON and embedded files, so it is set up for Native AOT
+  (`dotnet publish Samples/Showcase -c Release -r win-x64`; on Windows this needs Visual Studio's C++ build tools).

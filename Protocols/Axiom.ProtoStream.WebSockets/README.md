@@ -23,7 +23,8 @@ if (WebSocket.IsUpgrade(request))
 
 - Server and client roles: masking checked on receive, fresh random keys on send.
 - Fragmentation with interleaved control frames, UTF-8 validation of text, close-code validation.
-- Pings are answered, closes are echoed, the close handshake is bounded by a timeout.
+- Pings are answered within a budget (a flood closes with 1008), closes are echoed, the close handshake is
+  bounded by a timeout; a message's deadline holds while control frames are answered.
 - Messages above the size limit are refused from their header, before their bytes arrive.
 - Optional keep-alive pings; received messages are pooled and decoded without heap copies.
 - Close codes are named constants in `WsCloseCode`.

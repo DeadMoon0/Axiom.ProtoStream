@@ -30,9 +30,11 @@ await foreach (ChatMessage message in session.Messages.WithCancellation(ct))
 - **Framing**: length-prefixed (fixed, varint, QUIC varint, hex), delimited, fixed-size, header-declared length,
   Content-Length headers. Every framer has a required maximum.
 - **Wire**: `WireReader` / `WireWriter` for binary fields; bounded, never throwing on input.
-- **Limits**: timeouts, buffer and drain limits, a budget for automatic replies. Turning one off is a named
-  opt-out recorded as a definition warning.
+- **Limits**: timeouts, minimum data rates for payloads and output, buffer and drain limits, a budget for
+  automatic replies. Turning one off is a named opt-out recorded as a definition warning.
 
-The steady state reads without allocating, and the framework never schedules work on its own.
+The steady state reads without allocating, and the framework never schedules work on its own. Messages are
+pooled and stamped: one used after the next read, a switch or disposal throws instead of showing memory another
+connection may already use.
 
 See the [repository](https://github.com/DeadMoon0/Axiom.ProtoStream) for the architecture, security and error docs.

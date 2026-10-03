@@ -15,9 +15,11 @@ Open http://localhost:9001/ and type a message.
 dotnet publish Samples/WebSocketEcho -c Release -r win-x64
 ```
 
+On Windows, Native AOT needs Visual Studio's C++ build tools.
+
 ## WebSocket conformance (Autobahn)
 
-With the sample running and Docker available:
+With the sample running and Docker available (PowerShell; in other shells use `$(pwd)` instead of `${PWD}`):
 
 ```bash
 docker run --rm -v "${PWD}/Samples/WebSocketEcho/autobahn:/config" -v "${PWD}/Samples/WebSocketEcho/autobahn/reports:/reports" crossbario/autobahn-testsuite wstest -m fuzzingclient -s /config/fuzzingclient.json
