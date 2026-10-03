@@ -10,7 +10,7 @@
 		<PackageTags>Axiom;ProtoStream;protocol;pipelines;websocket;rfc6455;networking</PackageTags>
 		<PackageIcon>Icon.png</PackageIcon>
 		<Description>RFC 6455 WebSockets for Axiom.ProtoStream: server and client roles with fragmentation, control frames, incremental UTF-8 validation and the close handshake, plus the HTTP/1.1 upgrade from an Axiom.ProtoStream.Http session.</Description>
-		<Version>0.1.0</Version>
+		<Version>0.2.0</Version>
 		<PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
 		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>

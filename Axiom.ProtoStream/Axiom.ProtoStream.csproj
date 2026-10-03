@@ -10,7 +10,7 @@
 		<PackageTags>Axiom;ProtoStream;protocol;pipelines;networking;framing;codec;state-machine;binary;tcp</PackageTags>
 		<PackageIcon>Icon.png</PackageIcon>
 		<Description>Describe a network protocol once (framing, messages, state machine, limits, lifecycle) and run it over any Stream or IDuplexPipe. Built on System.IO.Pipelines: zero-copy parsing, allocation-free steady state, protocol switching, typed sessions consumed with await foreach.</Description>
-		<Version>0.1.0</Version>
+		<Version>0.2.0</Version>
 		<PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
 		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>

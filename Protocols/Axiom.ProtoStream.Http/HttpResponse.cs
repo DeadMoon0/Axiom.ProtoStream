@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using Axiom.ProtoStream.Errors;
@@ -16,33 +17,50 @@ namespace Axiom.ProtoStream.Http;
 public sealed class HttpResponse
 {
     private readonly string? _reasonPhrase;
+    private readonly HttpResponseHead? _head;
+    private HttpResponseHeaders? _headers;
     private FrozenResponseHead? _frozenHead;
 
     /// <summary>Creates a response with the given status code and no content.</summary>
     public HttpResponse(int statusCode)
     {
-        if (statusCode is < HttpStatus.MinValue or > HttpStatus.MaxValue)
-            throw new ArgumentOutOfRangeException(nameof(statusCode), statusCode, "An HTTP status code has three digits.");
+        HttpResponseHead.ThrowIfInvalidStatus(statusCode);
         StatusCode = statusCode;
+    }
+
+    /// <summary>
+    /// Creates a response whose status line and fields come from <paramref name="head"/>, validated and encoded
+    /// once. Nothing of the head is checked or encoded again; fields added to <see cref="Headers"/> follow it.
+    /// </summary>
+    public HttpResponse(HttpResponseHead head)
+    {
+        ArgumentNullException.ThrowIfNull(head);
+        _head = head;
+        StatusCode = head.StatusCode;
     }
 
     /// <summary>The status code.</summary>
     public int StatusCode { get; }
 
     /// <summary>The reason phrase; the standard phrase of the status code when not set.</summary>
+    /// <exception cref="ProtocolStateException">Set on a response created from a head, which carries its own.</exception>
     public string? ReasonPhrase
     {
-        get => _reasonPhrase;
+        get => _head is null ? _reasonPhrase : _head.ReasonPhrase;
         init
         {
-            if (value is not null && (!HttpSyntax.IsFieldValue(value) || value.Contains('\t', StringComparison.Ordinal)))
-                throw new ProtocolStateException("A reason phrase must not contain control characters.");
+            if (_head is not null)
+                throw new ProtocolStateException("The reason phrase of a response created from a head is the head's.") { Guidance = "Pass it to HttpResponseHead.Create." };
+            HttpResponseHead.ThrowIfInvalidReason(value);
             _reasonPhrase = value;
         }
     }
 
-    /// <summary>Header fields other than the framing fields.</summary>
-    public HttpResponseHeaders Headers { get; } = new();
+    /// <summary>The head this response was created from, if any.</summary>
+    public HttpResponseHead? Head => _head;
+
+    /// <summary>Header fields other than the framing fields; for a response created from a head, the fields after it.</summary>
+    public HttpResponseHeaders Headers => _headers ??= new();
 
     /// <summary>The body as bytes. Leave empty when <see cref="ContentStream"/> is used.</summary>
     public ReadOnlyMemory<byte> Content { get; init; }
@@ -137,26 +155,86 @@ public sealed class HttpResponse
 
     internal FrozenResponseHead? FrozenHead => Volatile.Read(ref _frozenHead);
 
-    internal bool HasField(string name)
-    {
-        foreach (KeyValuePair<string, string> field in Headers.Fields)
-        {
-            if (field.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
+    /// <summary>The fields added to <see cref="Headers"/>, without creating the collection.</summary>
+    internal ReadOnlySpan<KeyValuePair<string, string>> AddedFields => _headers is null ? default : CollectionsMarshal.AsSpan(_headers.Fields);
 
-        return false;
-    }
+    /// <summary>Whether the application set Date itself; answered from the encoded heads without a lookup when it can be.</summary>
+    internal bool HasDate =>
+        FrozenHead?.HasDate ?? ((_head?.Encoded.HasDate ?? false) || HttpResponseHeaders.Find(AddedFields, "Date") is not null);
+
+    internal bool HasField(string name) => FieldValue(name) is not null;
 
     internal string? FieldValue(string name)
     {
-        foreach (KeyValuePair<string, string> field in Headers.Fields)
-        {
-            if (field.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
-                return field.Value;
-        }
+        if (_head?.FieldValue(name) is { } inHead)
+            return inHead;
+        return HttpResponseHeaders.Find(AddedFields, name);
+    }
+}
 
-        return null;
+/// <summary>
+/// A status line and header fields, validated and encoded once. Responses created from it with
+/// <see cref="HttpResponse(HttpResponseHead)"/> share the encoded bytes: per request, only the content, the
+/// framing fields and <c>Date</c> are written. Immutable and safe to share across sessions and threads.
+/// </summary>
+public sealed class HttpResponseHead
+{
+    private readonly KeyValuePair<string, string>[] _fields;
+
+    private HttpResponseHead(int statusCode, string? reasonPhrase, KeyValuePair<string, string>[] fields)
+    {
+        StatusCode = statusCode;
+        ReasonPhrase = reasonPhrase;
+        _fields = fields;
+        var bytes = new ArrayBufferWriter<byte>();
+        Http11ServerCodec.WriteStatusLine(statusCode, reasonPhrase ?? HttpStatus.ReasonPhrase(statusCode), bytes);
+        foreach (KeyValuePair<string, string> field in fields)
+            Http11ServerCodec.WriteField(field.Key, field.Value, bytes);
+        Encoded = new FrozenResponseHead(bytes.WrittenSpan.ToArray(), FieldValue("Date") is not null);
+    }
+
+    /// <summary>The status code.</summary>
+    public int StatusCode { get; }
+
+    /// <summary>The reason phrase; the standard phrase of the status code when null.</summary>
+    public string? ReasonPhrase { get; }
+
+    /// <summary>The fields, in the order they are sent.</summary>
+    public IReadOnlyList<KeyValuePair<string, string>> Fields => _fields;
+
+    /// <summary>Validates and encodes a head. The fields follow the rules of <see cref="HttpResponseHeaders.Add"/>.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The status code does not have three digits.</exception>
+    /// <exception cref="ProtocolStateException">A field or the reason phrase is malformed, or a field is a framing field.</exception>
+    public static HttpResponseHead Create(int statusCode, IEnumerable<KeyValuePair<string, string>> fields) => Create(statusCode, fields, null);
+
+    /// <summary>Validates and encodes a head with its own reason phrase; null means the status code's standard phrase.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The status code does not have three digits.</exception>
+    /// <exception cref="ProtocolStateException">A field or the reason phrase is malformed, or a field is a framing field.</exception>
+    public static HttpResponseHead Create(int statusCode, IEnumerable<KeyValuePair<string, string>> fields, string? reasonPhrase)
+    {
+        ArgumentNullException.ThrowIfNull(fields);
+        ThrowIfInvalidStatus(statusCode);
+        ThrowIfInvalidReason(reasonPhrase);
+        KeyValuePair<string, string>[] copy = [.. fields];
+        foreach (KeyValuePair<string, string> field in copy)
+            HttpResponseHeaders.ThrowIfInvalid(field.Key, field.Value);
+        return new HttpResponseHead(statusCode, reasonPhrase, copy);
+    }
+
+    internal FrozenResponseHead Encoded { get; }
+
+    internal string? FieldValue(string name) => HttpResponseHeaders.Find(_fields, name);
+
+    internal static void ThrowIfInvalidStatus(int statusCode)
+    {
+        if (statusCode is < HttpStatus.MinValue or > HttpStatus.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(statusCode), statusCode, "An HTTP status code has three digits.");
+    }
+
+    internal static void ThrowIfInvalidReason(string? reasonPhrase)
+    {
+        if (reasonPhrase is not null && (!HttpSyntax.IsFieldValue(reasonPhrase) || reasonPhrase.Contains('\t', StringComparison.Ordinal)))
+            throw new ProtocolStateException("A reason phrase must not contain control characters.");
     }
 }
 
@@ -175,21 +253,8 @@ public sealed class HttpResponseHeaders : IEnumerable<KeyValuePair<string, strin
     /// </summary>
     public HttpResponseHeaders Add(string name, string value)
     {
-        ArgumentNullException.ThrowIfNull(name);
-        ArgumentNullException.ThrowIfNull(value);
         ThrowIfFrozen();
-        if (!HttpSyntax.IsToken(name))
-            throw new ProtocolStateException($"'{name}' is not a valid header name.");
-        if (!HttpSyntax.IsFieldValue(value))
-            throw new ProtocolStateException($"The value of '{name}' contains control characters.");
-        if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Connection", StringComparison.OrdinalIgnoreCase))
-            throw new ProtocolStateException($"'{name}' is derived from the content and the request; it cannot be set.")
-            {
-                Guidance = "Set Content, ContentStream and ContentLength, or CloseConnection, instead.",
-            };
-
+        ThrowIfInvalid(name, value);
         _fields.Add(new KeyValuePair<string, string>(name, value));
         return this;
     }
@@ -209,6 +274,34 @@ public sealed class HttpResponseHeaders : IEnumerable<KeyValuePair<string, strin
     internal List<KeyValuePair<string, string>> Fields => _fields;
 
     internal void Freeze() => Volatile.Write(ref _frozen, true);
+
+    internal static string? Find(ReadOnlySpan<KeyValuePair<string, string>> fields, string name)
+    {
+        foreach (KeyValuePair<string, string> field in fields)
+        {
+            if (field.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
+                return field.Value;
+        }
+
+        return null;
+    }
+
+    internal static void ThrowIfInvalid(string name, string value)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(value);
+        if (!HttpSyntax.IsToken(name))
+            throw new ProtocolStateException($"'{name}' is not a valid header name.");
+        if (!HttpSyntax.IsFieldValue(value))
+            throw new ProtocolStateException($"The value of '{name}' contains control characters.");
+        if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Connection", StringComparison.OrdinalIgnoreCase))
+            throw new ProtocolStateException($"'{name}' is derived from the content and the request; it cannot be set.")
+            {
+                Guidance = "Set Content, ContentStream and ContentLength, or CloseConnection, instead.",
+            };
+    }
 
     private void ThrowIfFrozen()
     {

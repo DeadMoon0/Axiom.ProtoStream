@@ -133,7 +133,7 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
             WriteHead(response, output);
 
         // RFC 9110 section 6.6.1: an origin server with a clock MUST send Date in 2xx, 3xx and 4xx responses.
-        if (!informational && !(response.FrozenHead?.HasDate ?? response.HasField("Date")))
+        if (!informational && !response.HasDate)
             WriteDate(output);
 
         if (!bodiless)
@@ -591,12 +591,15 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
     /// <summary>The status line and the application's fields: everything of the head that does not depend on the request.</summary>
     internal static void WriteHead(HttpResponse response, IBufferWriter<byte> output)
     {
-        WriteStatusLine(response.StatusCode, response.Reason, output);
-        foreach (KeyValuePair<string, string> field in response.Headers.Fields)
+        if (response.Head is { } head)
+            output.Write(head.Encoded.Bytes);
+        else
+            WriteStatusLine(response.StatusCode, response.Reason, output);
+        foreach (KeyValuePair<string, string> field in response.AddedFields)
             WriteField(field.Key, field.Value, output);
     }
 
-    private static void WriteStatusLine(int status, string reason, IBufferWriter<byte> output)
+    internal static void WriteStatusLine(int status, string reason, IBufferWriter<byte> output)
     {
         // status-line = HTTP-version SP status-code SP [ reason-phrase ] (RFC 9112 section 4)
         output.Write(HttpGrammar.Http11);
@@ -607,7 +610,7 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
         output.Write(HttpGrammar.Crlf);
     }
 
-    private static void WriteField(string name, string value, IBufferWriter<byte> output)
+    internal static void WriteField(string name, string value, IBufferWriter<byte> output)
     {
         WriteLatin1(name, output);
         output.Write(HttpGrammar.FieldSeparator);

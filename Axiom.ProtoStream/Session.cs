@@ -468,6 +468,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         }
     }
 
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<ProtocolReadResult<TIn>> ReadNextMessageAsync(PendingParse pending, CancellationToken cancellationToken)
     {
         try
@@ -626,6 +627,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     /// Reads from the pipe. The timeout is armed only when the read actually waits, once per message: buffered
     /// messages cost no timer operations, and a peer trickling bytes cannot restart the clock.
     /// </summary>
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
     private async ValueTask<ReadResult> ReadInputAsync(CancellationToken cancellationToken)
     {
         try

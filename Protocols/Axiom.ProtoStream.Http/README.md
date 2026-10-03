@@ -28,6 +28,9 @@ await foreach (HttpRequest request in http.Messages.WithCancellation(ct))
 - Minimum data rates for request bodies and responses (240 bytes/s after 5 s by default) stop slow POST and
   slow read; chunk extensions, trailers and chunk framing are bounded.
 - `HttpResponse.Freeze()` makes a response immutable and shareable by every connection; its head is encoded once.
+- `HttpResponseHead.Create(status, fields)` validates and encodes a status line and fields once; `new HttpResponse(head)`
+  then costs one object per request, with per-request content and any further fields after the head.
+- `AuthorityBytes`, `HttpHeader.NameEquals` and the other byte accessors read a request without allocating strings.
 - `Http11Options.CoalescePipelinedResponses` sends the responses to pipelined requests with one flush.
 - Status codes are named constants in `HttpStatus`.
 

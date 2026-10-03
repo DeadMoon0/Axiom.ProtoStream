@@ -10,7 +10,7 @@
 		<PackageTags>Axiom;ProtoStream;protocol;pipelines;http;http1;server;networking</PackageTags>
 		<PackageIcon>Icon.png</PackageIcon>
 		<Description>The HTTP/1.1 server role for Axiom.ProtoStream (RFC 9110, RFC 9112, RFC 3986 targets): zero-copy request heads, streamed bodies, keep-alive, pipelining, 100-continue, upgrades and CONNECT, refusing everything the RFCs call ambiguous.</Description>
-		<Version>0.1.0</Version>
+		<Version>0.2.0</Version>
 		<PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
 		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>

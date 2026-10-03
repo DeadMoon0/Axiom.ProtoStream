@@ -10,7 +10,7 @@
 		<PackageTags>Axiom;ProtoStream;protocol;pipelines;testing;fuzzing;codec</PackageTags>
 		<PackageIcon>Icon.png</PackageIcon>
 		<Description>Test harnesses for Axiom.ProtoStream protocol authors: codec round-trips across every segment boundary, seeded mutation fuzzing with a hang watchdog, definition lint assertions, pooled-message reset checks and in-memory transports. Test-framework agnostic.</Description>
-		<Version>0.1.0</Version>
+		<Version>0.2.0</Version>
 		<PackageProjectUrl>https://github.com/DeadMoon0/Axiom.ProtoStream</PackageProjectUrl>
 		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>

@@ -158,14 +158,17 @@ public sealed class HttpRequest
     /// The authority the request is for (RFC 9110 section 7.2): the target's authority for absolute-form and
     /// authority-form, otherwise the Host field. RFC 9112 section 3.2.2 makes the target win over Host.
     /// </summary>
-    public string Authority
+    public string Authority => Encoding.Latin1.GetString(AuthorityBytes.Span);
+
+    /// <summary>The bytes of <see cref="Authority"/>, without allocating; empty when the request names none.</summary>
+    public ReadOnlyMemory<byte> AuthorityBytes
     {
         get
         {
             Current();
             if (_authorityStart != Absent)
-                return Encoding.ASCII.GetString(_head.Span.Slice(_authorityStart, _authorityLength));
-            return _hostField == Absent ? string.Empty : Headers[_hostField].Value;
+                return _head.Slice(_authorityStart, _authorityLength);
+            return _hostField == Absent ? ReadOnlyMemory<byte>.Empty : Headers[_hostField].ValueBytes;
         }
     }
 
@@ -326,6 +329,13 @@ public readonly struct HttpHeader
 
     /// <summary>The field name as a string.</summary>
     public string Name => Encoding.ASCII.GetString(NameBytes.Span);
+
+    /// <summary>Whether the field is named <paramref name="name"/> (ASCII case-insensitive), without allocating.</summary>
+    public bool NameEquals(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        return Ascii.EqualsIgnoreCase(NameBytes.Span, name);
+    }
 
     /// <summary>The field value as a string (ISO-8859-1, as RFC 9110 defines field octets).</summary>
     public string Value => Encoding.Latin1.GetString(ValueBytes.Span);
