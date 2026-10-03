@@ -329,6 +329,37 @@ public sealed class SessionTests
         Assert.Equal(SessionStatus.Closed, server.Status);
     }
 
+    // A second closing message would break the protocol (RFC 6455 allows one close frame per side): when the
+    // application already sent one, closing only waits for the peer's answer.
+    [Fact]
+    public async Task CloseAfterTheApplicationSentTheClosingMessage_DoesNotSendItTwice()
+    {
+        await using var pair = new Pair();
+        ProtocolDefinition<ToyMessage, ToyMessage> definition = Toy.Describe()
+            .States(s => s
+                .Start("Open")
+                .In("Open").On<Data>().Delegate().OnSend<Bye>().GoTo("Closing")
+                .In("Closing").On<Bye>().Wait().GoTo("Closed").On<Data>().Wait()
+                .Final("Closed"))
+            .OnClose(() => new Bye())
+            .Build();
+        Session<ToyMessage, ToyMessage> server = await pair.Server.OpenAsync(definition, Ct);
+        await server.WriteAsync(new Bye(), Ct);
+        ReadResult sent = await pair.Transport.Client.Input.ReadAsync();
+        Assert.Equal(Toy.Frame(5), sent.Buffer.ToArray());
+        pair.Transport.Client.Input.AdvanceTo(sent.Buffer.End);
+
+        Task close = server.CloseAsync(Ct).AsTask();
+        await pair.SendRawAsync(Toy.Frame(5));
+        await close;
+
+        Assert.Equal(SessionStatus.Closed, server.Status);
+        await pair.Transport.Client.Output.CompleteAsync();
+        await pair.Server.DisposeAsync();
+        ReadResult rest = await pair.Transport.Client.Input.ReadAsync();
+        Assert.True(rest.Buffer.IsEmpty, "The closing message went out a second time.");
+    }
+
     [Fact]
     public async Task AThrowingResponderFaultsOnlyItsSession()
     {

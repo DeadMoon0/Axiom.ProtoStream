@@ -319,7 +319,8 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     /// <summary>
     /// Closes the session gracefully: sends the protocol's closing message if it has one and, when that
     /// starts a close handshake and no other read is running, waits for the peer's side, bounded by the close
-    /// timeout. The transport is released when the connection is disposed.
+    /// timeout. When the application already sent a closing message (the state no longer allows one), it is not
+    /// sent twice; the session only waits for the peer. The transport is released when the connection is disposed.
     /// </summary>
     public async ValueTask CloseAsync(CancellationToken cancellationToken)
     {
@@ -333,7 +334,9 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             await FlushDeferredAsync(linked.Token).ConfigureAwait(false);
             if (_definition.OnCloseMessage is { } closing)
             {
-                await WriteMessageAsync(closing(), WriteMode.Closing, linked.Token).ConfigureAwait(false);
+                TOut message = closing();
+                if (!AlreadyClosing(message))
+                    await WriteMessageAsync(message, WriteMode.Closing, linked.Token).ConfigureAwait(false);
                 while (Status == SessionStatus.Open && Volatile.Read(ref _readInFlight) == 0)
                 {
                     if ((await ReadAsync(linked.Token).ConfigureAwait(false)).IsCompleted)
@@ -853,6 +856,16 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         {
             throw new ProtocolStateException("The connection was disposed.", ex);
         }
+    }
+
+    /// <summary>
+    /// Whether the state has moved past the point where <paramref name="closing"/> may be sent: its type is one the
+    /// protocol sends in some state, but not in this one (a WebSocket that already sent its close frame).
+    /// </summary>
+    private bool AlreadyClosing(TOut closing)
+    {
+        int typeId = _definition.OutboundTypes.Find(closing.GetType());
+        return typeId >= 0 && !_states[Volatile.Read(ref _state)].Outbound[typeId].IsDefined;
     }
 
     private async ValueTask WriteLockedAsync(TOut message, WriteMode mode, CancellationToken cancellationToken)
