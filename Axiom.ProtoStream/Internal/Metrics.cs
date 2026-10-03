@@ -42,6 +42,7 @@ internal static class Metrics
         ViolationCode.UnexpectedMessage => "unexpected_message",
         ViolationCode.Truncated => "truncated",
         ViolationCode.Timeout => "timeout",
+        ViolationCode.RateExceeded => "rate_exceeded",
         _ => "unsupported",
     };
 }

@@ -46,6 +46,9 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
     private HttpProtocolVersion _lastVersion = HttpProtocolVersion.Http11;
     private bool _lastKeepAlive;
 
+    /// <summary>How far an incomplete head was already searched for its end, so a trickled head is scanned once.</summary>
+    private long _headScanned;
+
     public ParseResult TryParse(ref MessageParseContext context, out HttpRequest message)
     {
         message = null!;
@@ -59,12 +62,19 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
         {
         }
 
+        // Without this, a head trickled in one byte at a time is searched from its start on every byte.
+        if (_headScanned > reader.Consumed)
+            reader.Advance(Math.Min(_headScanned, reader.Remaining + reader.Consumed) - reader.Consumed);
+
         if (reader.End || !reader.TryReadTo(out ReadOnlySequence<byte> _, HttpGrammar.HeadEnd, advancePastDelimiter: true))
         {
+            _headScanned = Math.Max(0, Math.Min(input.Length, window) - (HttpGrammar.HeadEnd.Length - 1));
             return input.Length > window
                 ? context.Invalid(ViolationCode.LimitExceeded, HttpStatus.RequestHeaderFieldsTooLarge, $"The request head exceeds {options.MaxRequestHeadBytes} bytes.")
                 : context.NeedMore();
         }
+
+        _headScanned = 0;
 
         DetachedHead head = context.Detach(reader.Position);
         HttpRequest request = _requests[_nextRequest ^= 1];
@@ -439,7 +449,18 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
                     state.Count++;
                     state.LastIsChunked = Ascii.EqualsIgnoreCase(coding, HttpGrammar.Chunked);
                     if (state.LastIsChunked)
+                    {
+                        // chunked defines no parameters; "chunked;q=1" is something another parser may not
+                        // recognise as chunked at all (a TE.0 desync), so it is refused rather than read as chunked.
+                        if (semicolon >= 0)
+                        {
+                            state.Malformed = true;
+                            return false;
+                        }
+
                         state.Chunked++;
+                    }
+
                     return true;
                 });
             }
@@ -448,6 +469,11 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
                 // RFC 9110 section 7.2 / RFC 9112 section 3.2: Host = uri-host [ ":" port ], once.
                 if (!UriSyntax.IsHostAndOptionalPort(value))
                     return Fail(HttpStatus.BadRequest, "The Host field is malformed.", out error);
+
+                // A comma is legal in a reg-name, but it is also how intermediaries join repeated fields: one
+                // Host "a,b" and two Hosts "a" and "b" would look the same downstream.
+                if (value.Contains(HttpGrammar.Comma))
+                    return Fail(HttpStatus.BadRequest, "The Host field contains a comma.", out error);
                 hosts++;
                 hostField = fieldIndex;
             }

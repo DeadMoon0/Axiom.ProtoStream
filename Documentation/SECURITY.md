@@ -57,6 +57,32 @@ payload encoders. Codecs are created per session. Violation details never contai
 - **Pools are not cleared.** Returned memory keeps its old bytes. That is why the guards above exist; code that
   reads pooled memory without them (a custom codec reading past what it wrote) can see another connection's data.
 
+## Known attacks on comparable servers
+
+Checked against published vulnerabilities in Kestrel, Node.js (llhttp), Go net/http, Netty, Jetty, Tomcat,
+HAProxy, hyper, h11, aiohttp, Puma, gorilla/websocket, ws, Tungstenite and others (44 classes in total). Each
+row has regression tests that send the published attack input: `Http11KnownAttackTests.cs`,
+`WebSocketKnownAttackTests.cs`, `IsolationStressTests.cs` and the compliance tests.
+
+| Class | Examples | ProtoStream |
+|---|---|---|
+| Request smuggling: CL and TE together, obfuscated or parameterised TE, CL lists, signs, empty or overlong values | CVE-2019-20445 (Netty), CVE-2024-1135 (gunicorn), CVE-2021-32715 (hyper) | Refused with 400 and the connection closed; `chunked;q=1` is refused, not read as chunked. |
+| Line-ending tricks: bare LF, bare CR, obs-fold, whitespace before the colon, empty field names | CVE-2022-32214/-32215 (llhttp), CVE-2023-30589 (Node), CVE-2019-16869 (Netty), CVE-2023-25725 (HAProxy) | Refused with 400. |
+| Chunk parsing: size overflow, bare LF/CR in size lines ("funky chunks"), data without CRLF, whitespace after the size | CVE-2017-7657 (Jetty), CVE-2025-55315 (Kestrel), CVE-2025-22871 (Go), CVE-2025-43859 (h11) | Malformed, the connection fails. |
+| Chunk extension and trailer exhaustion, framing far larger than the data | CVE-2024-22019 (Node), CVE-2024-21647 (Puma), CVE-2023-39326 (Go), CVE-2023-46589 (Tomcat) | Size lines capped at 273 bytes, trailers at 8 KiB, framing at 4 KiB + 16 bytes per data byte, also while an unread body is discarded. |
+| CL.0 / ignored bodies, errors while discarding a body | Kettle 2022, CVE-2022-22720 (httpd) | Bodies are framed for every method and drained; a failure while draining ends the connection. |
+| Host confusion: missing, repeated, malformed, comma-joined | CVE-2025-12543 (Undertow) | Refused with 400. Absolute-form targets win over Host (RFC 9112), exposed as `Authority`. |
+| Response splitting through header values, reason phrases or characters beyond Latin-1 | CVE-2018-12116 (Node) | Refused before a byte is written. |
+| Slowloris, slow POST, slow read | CVE-2007-6750, CVE-2018-12122 (Node), CVE-2013-4450 (Node) | One deadline per message head; minimum data rates for bodies and output. |
+| Re-scanning a trickled head | CVE-2023-43669 (Tungstenite) | The search resumes where it stopped. |
+| WebSocket size limits: oversized frames, fragments adding up, 63-bit length overflow | CVE-2016-10542 (ws), CVE-2020-27813 (gorilla) | Refused from the frame header with 1009. |
+| Ping floods, unfinished messages kept alive by pings, close handshakes that never end | CVE-2019-9512, Bandit advisory, CVE-2024-23672 (Tomcat) | Budget of automatic replies (close 1008), a message's deadline stands while control frames are answered, close bounded by the close timeout. |
+| Upgrade smuggling: bodies on upgrade requests, refused upgrades | WebSocket and h2c smuggling research | The body is discarded before the switch; a refused upgrade closes the connection. |
+| Decompression bombs | CVE-2018-1000518 (websockets) | Not applicable: no extensions are negotiated, RSV bits are refused. |
+
+**Left to the host**: checking `Origin` on WebSocket upgrades (cross-site WebSocket hijacking), deciding which
+`CONNECT` targets may be tunnelled, TLS, and connection limits.
+
 ## Defaults
 
 | Limit | Core | HTTP/1.1 | WebSocket |

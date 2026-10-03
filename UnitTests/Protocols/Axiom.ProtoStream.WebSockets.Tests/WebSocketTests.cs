@@ -17,7 +17,7 @@ using Axiom.ProtoStream.Tests.Shared;
 
 namespace Axiom.ProtoStream.WebSockets.Tests;
 
-public sealed class WebSocketTests
+public sealed partial class WebSocketTests
 {
     private static readonly CancellationToken Ct = CancellationToken.None;
 

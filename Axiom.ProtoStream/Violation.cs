@@ -23,6 +23,9 @@ public enum ViolationCode
 
     /// <summary>A feature of the protocol this implementation does not support.</summary>
     Unsupported,
+
+    /// <summary>The peer made the framework send more automatic replies than the budget allows.</summary>
+    RateExceeded,
 }
 
 /// <summary>Describes one protocol violation.</summary>

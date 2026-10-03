@@ -70,6 +70,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     private int _status;
     private int _readInFlight;
     private int _flushDeferred;
+    private int _heartbeatPending;
     private int _tornDown;
     private TaskCompletionSource? _quiesceWaiter;
     private int _released;
@@ -554,8 +555,10 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
                         if (Status != SessionStatus.Open)
                             return default;
 
-                        // Handled by the framework; the next message gets its own time window.
-                        DisarmTimer();
+                        // Handled by the framework; the next message gets its own time window, unless the reader is
+                        // still assembling one: then its deadline stands.
+                        if (!CurrentReader().HasPartialMessage)
+                            DisarmTimer();
                         continue;
                 }
             }
@@ -730,7 +733,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
                 }
 
                 if (!TakeBudget())
-                    throw await ViolateAsync(ViolationCode.LimitExceeded, "The peer triggered more automatic replies than the budget allows.").ConfigureAwait(false);
+                    throw await ViolateAsync(ViolationCode.RateExceeded, "The peer triggered more automatic replies than the budget allows.").ConfigureAwait(false);
                 await WriteMessageAsync(reply, WriteMode.Automatic, cancellationToken).ConfigureAwait(false);
                 break;
 
@@ -758,7 +761,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
         if (target.OnEnter is { } enter)
         {
             if (!TakeBudget())
-                throw await ViolateAsync(ViolationCode.LimitExceeded, "The peer triggered more automatic messages than the budget allows.").ConfigureAwait(false);
+                throw await ViolateAsync(ViolationCode.RateExceeded, "The peer triggered more automatic messages than the budget allows.").ConfigureAwait(false);
             await WriteMessageAsync(enter(), WriteMode.Automatic, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -1062,7 +1065,11 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     {
         if (Status != SessionStatus.Open || _time.GetElapsedTime(Volatile.Read(ref _lastWrite)) < _definition.HeartbeatInterval)
             return;
-        _ = SendHeartbeatAsync();
+
+        // One heartbeat at a time: behind a peer that stopped reading, every tick would otherwise add a task
+        // waiting for the write lock.
+        if (Interlocked.Exchange(ref _heartbeatPending, 1) == 0)
+            _ = SendHeartbeatAsync();
     }
 
     private async Task SendHeartbeatAsync()
@@ -1076,6 +1083,10 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
             // A failed heartbeat means a broken transport; the reading loop sees the fault next.
             if (Status == SessionStatus.Open)
                 Fault(ex);
+        }
+        finally
+        {
+            Volatile.Write(ref _heartbeatPending, 0);
         }
     }
 

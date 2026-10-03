@@ -17,12 +17,23 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
     /// <summary>Most bytes of chunk extensions on one size line.</summary>
     private const int MaxExtensionBytes = 256;
 
+    /// <summary>Framing bytes (size lines, extensions, CRLFs) allowed per byte of chunk data.</summary>
+    /// <remarks>
+    /// Without it, one data byte per chunk behind a long extension makes the server read some 270 bytes per body
+    /// byte, past every limit that counts data (Go CVE-2023-39326). Go allows the same ratio.
+    /// </remarks>
+    private const int MaxFramingPerDataByte = 16;
+
+    /// <summary>Framing bytes allowed regardless of the data, so short bodies with extensions still pass.</summary>
+    private const int FramingAllowance = 4096;
+
     /// <summary>Format code for hexadecimal numbers in <see cref="Utf8Parser"/> and <see cref="Utf8Formatter"/>.</summary>
     internal const char HexFormat = 'X';
 
     private State _state;
     private long _remainingInChunk;
     private long _total;
+    private long _framing;
     private long _maxTotal;
     private int _trailerBytes;
     private int _maxTrailerBytes;
@@ -45,6 +56,7 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
         _state = State.Size;
         _remainingInChunk = 0;
         _total = 0;
+        _framing = 0;
         _maxTotal = maxBodySize;
         _trailerBytes = 0;
         _maxTrailerBytes = maxTrailerBytes;
@@ -70,6 +82,8 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
                     _total += size;
                     if (size > _maxTotal || _total > _maxTotal)
                         return PayloadStep.Invalid(ViolationCode.LimitExceeded, "The chunked body exceeds the maximum body size.");
+                    if (!AddFraming(lineLength))
+                        return PayloadStep.Invalid(ViolationCode.LimitExceeded, "The chunked body carries far more framing than data.");
 
                     skip += lineLength;
                     _remainingInChunk = size;
@@ -89,6 +103,8 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
                         return PayloadStep.Invalid(ViolationCode.Malformed, "Chunk data is not followed by CRLF.");
                     skip += HttpGrammar.Crlf.Length;
                     _state = State.Size;
+                    if (!AddFraming(HttpGrammar.Crlf.Length))
+                        return PayloadStep.Invalid(ViolationCode.LimitExceeded, "The chunked body carries far more framing than data.");
                     continue;
                 }
 
@@ -123,6 +139,12 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
         _remainingInChunk -= dataBytes;
         if (_state == State.Data && _remainingInChunk == 0)
             _state = State.DataEnd;
+    }
+
+    private bool AddFraming(long bytes)
+    {
+        _framing += bytes;
+        return _framing <= FramingAllowance + (MaxFramingPerDataByte * _total);
     }
 
     private static PayloadStep NeedMore(long skip, bool isCompleted) =>
@@ -170,9 +192,11 @@ public sealed class ChunkedPayloadDecoder : IPayloadDecoder
     {
         while (true)
         {
-            extensions = SkipWhitespace(extensions);
-            if (extensions.IsEmpty)
-                return true;
+            // BWS is allowed only around ";" and "=": whitespace that ends the line is not part of the grammar.
+            ReadOnlySpan<byte> trimmed = SkipWhitespace(extensions);
+            if (trimmed.IsEmpty)
+                return extensions.IsEmpty;
+            extensions = trimmed;
             if (extensions[0] != HttpGrammar.Semicolon)
                 return false;
             extensions = SkipWhitespace(extensions[1..]);

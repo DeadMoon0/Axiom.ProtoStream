@@ -70,7 +70,7 @@ Verified by unit tests and by the [Autobahn testsuite](https://github.com/crossb
 (fuzzingclient against `Samples/WebSocketEcho`, cases 1–10; 12–13 cover permessage-deflate, which is not
 negotiated). See [the sample](../Samples/WebSocketEcho/README.md) to reproduce.
 
-Latest Autobahn result (testsuite 25.10.1, 2026-10-02): **301 cases — 298 OK, 3 informational, 0 non-strict,
+Latest Autobahn result (testsuite 25.10.1, 2026-10-03, one uninterrupted run): **301 cases — 298 OK, 3 informational, 0 non-strict,
 0 failed.** The informational cases (7.1.6, 7.13.1, 7.13.2) exercise behaviour RFC 6455 leaves undefined.
 
 | Section | Requirement | Behaviour | Test |

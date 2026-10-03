@@ -248,7 +248,7 @@ public sealed class SessionTests
         await pair.SendRawAsync(Enumerable.Range(0, 11).Select(i => Toy.PingFrame((uint)i)).ToArray());
 
         var ex = await Assert.ThrowsAsync<ProtocolViolationException>(() => server.ReadAsync(Ct).AsTask());
-        Assert.Equal(ViolationCode.LimitExceeded, ex.Violation.Code);
+        Assert.Equal(ViolationCode.RateExceeded, ex.Violation.Code);
     }
 
     [Fact]

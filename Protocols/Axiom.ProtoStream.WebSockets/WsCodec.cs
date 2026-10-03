@@ -77,6 +77,9 @@ internal static class WsFrame
 /// </summary>
 internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
 {
+    /// <inheritdoc />
+    public bool HasPartialMessage => _fragmentedOpcode.HasValue || _inDataFrame;
+
     private const int StackTextLimit = 512;
 
     /// <summary>Characters decoded per step while validating text.</summary>
@@ -211,7 +214,8 @@ internal sealed class WsCodec : ICodec<WsMessage, WsMessage>, IDisposable
             if (!control && (opcode == WsOpcode.Continuation) != _fragmentedOpcode.HasValue)
                 return ProtocolError(ref context, opcode == WsOpcode.Continuation ? "A continuation frame has no message to continue." : "A new message started before the previous one ended.");
             long assembled = opcode == WsOpcode.Continuation ? _message.Length : 0;
-            if (!control && assembled + length > _maxMessageSize)
+            // Compared as a difference: assembled + length overflows for a 63-bit length (gorilla CVE-2020-27813).
+            if (!control && length > _maxMessageSize - assembled)
                 return context.Invalid(ViolationCode.LimitExceeded, WsCloseCode.MessageTooBig, $"A message exceeds {_maxMessageSize} bytes.");
 
             int maskOffset = headerSize;

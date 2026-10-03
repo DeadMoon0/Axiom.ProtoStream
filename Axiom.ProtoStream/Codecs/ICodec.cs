@@ -25,6 +25,13 @@ public interface IMessageReader<TIn>
     /// policy can discard a bad message and keep reading. Used by the definition linter.
     /// </summary>
     bool CanResync => false;
+
+    /// <summary>
+    /// True while the reader holds part of a message (a fragmented WebSocket message, for example). Messages the
+    /// framework handles in between then do not restart the message's timeout, so a peer cannot keep an
+    /// unfinished message alive forever by interleaving pings.
+    /// </summary>
+    bool HasPartialMessage => false;
 }
 
 /// <summary>Turns messages into bytes for the connection.</summary>

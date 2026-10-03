@@ -109,6 +109,7 @@ public static class Http11
         _ => HttpResponse.Error(violation.ProtocolErrorCode ?? violation.Code switch
         {
             ViolationCode.LimitExceeded => HttpStatus.RequestHeaderFieldsTooLarge,
+            ViolationCode.RateExceeded => HttpStatus.TooManyRequests,
             ViolationCode.Unsupported => HttpStatus.NotImplemented,
             _ => HttpStatus.BadRequest,
         }),

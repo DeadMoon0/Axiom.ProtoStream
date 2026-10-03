@@ -232,6 +232,7 @@ public static class WebSocket
         _ => WsMessage.CreateClose(violation.ProtocolErrorCode ?? violation.Code switch
         {
             ViolationCode.LimitExceeded => WsCloseCode.MessageTooBig,
+            ViolationCode.RateExceeded => WsCloseCode.PolicyViolation,
             ViolationCode.InvalidData => WsCloseCode.InvalidPayloadData,
             ViolationCode.Timeout => WsCloseCode.GoingAway,
             ViolationCode.Unsupported => WsCloseCode.UnsupportedData,
