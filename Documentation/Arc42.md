@@ -113,7 +113,10 @@ ReadAsync
 ```
 
 A read of a message that is already buffered completes synchronously and allocates nothing; a write that finds
-the write lock free and flushes synchronously does too.
+the write lock free and flushes synchronously does too. A read that waits for input keeps its async state in boxes
+from `PooledValueTaskMethodBuilder` (`Internal/`): a pool striped per core with up to 128 boxes per stripe, so a
+server with thousands of sessions waiting allocates none in steady state, where .NET's pooling builder keeps about
+one box per thread.
 
 ## 7. Cross-cutting concepts
 

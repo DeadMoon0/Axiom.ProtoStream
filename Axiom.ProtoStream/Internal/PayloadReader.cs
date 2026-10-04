@@ -99,7 +99,7 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
         _emptyPayload = EndsWithoutInput();
     }
 
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
+    [AsyncMethodBuilder(typeof(PooledValueTaskMethodBuilder<>))]
     public override async ValueTask<ReadResult> ReadAsync(CancellationToken cancellationToken = default)
     {
         BeginApplicationRead();
@@ -201,7 +201,7 @@ internal sealed class PayloadReader(IPayloadHost host) : PipeReader
     }
 
     /// <summary>Discards whatever the user did not read of the current payload, up to <paramref name="limit"/> bytes.</summary>
-    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+    [AsyncMethodBuilder(typeof(PooledValueTaskMethodBuilder))]
     public async ValueTask DrainAsync(long limit, CancellationToken cancellationToken)
     {
         if (_decoder is null)
