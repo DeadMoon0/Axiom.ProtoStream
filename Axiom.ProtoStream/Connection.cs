@@ -5,6 +5,7 @@ using System.IO.Pipelines;
 using System.Threading;
 using System.Threading.Tasks;
 using Axiom.ProtoStream.Errors;
+using Axiom.ProtoStream.Internal;
 
 namespace Axiom.ProtoStream;
 
@@ -195,7 +196,7 @@ public sealed class Connection : IAsyncDisposable
     private static IDuplexPipe CreatePipe(Stream input, Stream output, ConnectionOptions options)
     {
         MemoryPool<byte> pool = options.Pool ?? MemoryPool<byte>.Shared;
-        var reader = PipeReader.Create(input, new StreamPipeReaderOptions(pool: pool, bufferSize: options.MinimumReadSize, leaveOpen: true, useZeroByteReads: true));
+        var reader = new StreamInputReader(input, pool, options.MinimumReadSize);
         var writer = PipeWriter.Create(output, new StreamPipeWriterOptions(pool, minimumBufferSize: options.MinimumReadSize, leaveOpen: true));
         return new DuplexPipe(reader, writer);
     }

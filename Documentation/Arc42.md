@@ -116,7 +116,9 @@ A read of a message that is already buffered completes synchronously and allocat
 the write lock free and flushes synchronously does too. A read that waits for input keeps its async state in boxes
 from `PooledValueTaskMethodBuilder` (`Internal/`): a pool striped per core with up to 128 boxes per stripe, so a
 server with thousands of sessions waiting allocates none in steady state, where .NET's pooling builder keeps about
-one box per thread.
+one box per thread. A connection over a stream reads through `StreamInputReader` (`Internal/`) rather than
+`PipeReader.Create`, for the same reason: it waits with a zero-byte read (an idle connection holds no buffer),
+reuses its segments, and keeps its async state in the same pool.
 
 ## 7. Cross-cutting concepts
 
