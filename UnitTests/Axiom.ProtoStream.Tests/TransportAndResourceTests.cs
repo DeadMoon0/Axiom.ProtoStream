@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Axiom.ProtoStream.Codecs;
+using Axiom.ProtoStream.Internal;
 using Axiom.ProtoStream.Testing;
 
 using Axiom.ProtoStream.Tests.Shared;
@@ -289,5 +290,24 @@ public sealed class TransportAndResourceTests
         ProtocolDefinition<ToyMessage, ToyMessage> definition = Toy.Server().OnViolation(ViolationAction.Skip).Build();
 
         Assert.DoesNotContain(definition.Warnings, w => w.Contains("OnViolation(Skip)"));
+    }
+
+    // One large message must not pin its size for the rest of a long-lived connection (a WebSocket, a keep-alive).
+    [Fact]
+    public void TheWriteBufferGivesTheArrayOfALargeMessageBack_AndKeepsASmallOne()
+    {
+        using var buffer = new PooledBufferWriter(1024 * 1024);
+        buffer.GetSpan(500_000);
+        buffer.Advance(500_000);
+        Assert.True(buffer.Capacity >= 500_000);
+
+        buffer.Reset(retained: 64 * 1024);
+        Assert.Equal(0, buffer.Capacity);
+
+        buffer.GetSpan(1000);
+        buffer.Advance(1000);
+        int small = buffer.Capacity;
+        buffer.Reset(retained: 64 * 1024);
+        Assert.Equal(small, buffer.Capacity);
     }
 }

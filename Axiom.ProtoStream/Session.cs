@@ -31,6 +31,9 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
 {
     private const int MaxOutboundMessageBytes = 64 * 1024 * 1024;
 
+    /// <summary>The write buffer a session keeps between messages; a larger one goes back to the pool after its message.</summary>
+    private const int RetainedWriteBufferBytes = 64 * 1024;
+
     /// <summary>How often per heartbeat interval the session checks whether it has been quiet; a heartbeat is at most half an interval late.</summary>
     private const int HeartbeatChecksPerInterval = 2;
 
@@ -921,7 +924,7 @@ public sealed class Session<TIn, TOut> : IClosableSession, IPayloadHost
     // codec or a message that fails half-way can never leave half a message on the wire.
     private WriteResult Encode(TOut message)
     {
-        _writeBuffer.Reset();
+        _writeBuffer.Reset(RetainedWriteBufferBytes);
         WriteResult result;
         try
         {

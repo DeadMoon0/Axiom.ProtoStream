@@ -22,7 +22,23 @@ internal sealed class PooledBufferWriter(int maxCapacity) : IBufferWriter<byte>,
 
     public ReadOnlyMemory<byte> WrittenMemory => _buffer.AsMemory(0, _written);
 
+    /// <summary>The size of the array held now; what one large message leaves behind until it is trimmed.</summary>
+    internal int Capacity => _buffer.Length;
+
     public void Reset() => _written = 0;
+
+    /// <summary>
+    /// Starts over, and gives an array grown above <paramref name="retained"/> bytes back to the pool: one large
+    /// message must not pin its size for the rest of a long-lived connection.
+    /// </summary>
+    public void Reset(int retained)
+    {
+        _written = 0;
+        if (_buffer.Length <= retained)
+            return;
+        ArrayPool<byte>.Shared.Return(_buffer);
+        _buffer = [];
+    }
 
     public void Advance(int count)
     {

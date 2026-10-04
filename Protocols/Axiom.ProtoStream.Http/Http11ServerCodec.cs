@@ -28,6 +28,12 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
     /// <summary>The standard format code for RFC 1123 / IMF-fixdate dates in <see cref="Utf8Formatter"/>.</summary>
     private const char ImfFixdateFormat = 'R';
 
+    /// <summary>
+    /// Content up to this size is written with the head; larger content goes to the connection in slices, so it is
+    /// never copied whole into the session's write buffer.
+    /// </summary>
+    private const int MaxInlineContentBytes = 64 * 1024;
+
     private static ReadOnlySpan<byte> HttpScheme => "http"u8;
 
     private static ReadOnlySpan<byte> HttpsScheme => "https"u8;
@@ -162,8 +168,10 @@ internal sealed class Http11ServerCodec(Http11Options options) : ICodec<HttpRequ
         WriteResult result = WriteResult.Done;
         if (!bodiless && _lastMethod != HttpRequestMethod.Head)
         {
-            if (!hasStream)
+            if (!hasStream && response.Content.Length <= MaxInlineContentBytes)
                 output.Write(response.Content.Span);
+            else if (!hasStream)
+                result = WriteResult.WithPayload(new MemoryPayloadSource(response.Content), response.Content.Length, IdentityPayloadEncoder.Instance);
             else
                 result = WriteResult.WithPayload(response.ContentStream!, response.ContentLength, chunked ? ChunkedPayloadEncoder.Instance : IdentityPayloadEncoder.Instance);
         }
