@@ -15,7 +15,7 @@
 		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<Copyright>Copyright (c) DeadMoon0 2026</Copyright>
-		<PackageReleaseNotes>The first preview: protocol description with build-time validation and a definition linter; framing, message sets and Wire serialization; connections over Stream, stream pairs and IDuplexPipe; sessions read with await foreach, protocol switching, payload streaming; timeouts, minimum data rates, buffer and drain limits, a budget for automatic replies; pooled, stamped messages that refuse use after their lifetime.</PackageReleaseNotes>
+		<PackageReleaseNotes>Reading allocates nothing in steady state, large content is written in slices, and Close no longer sends the closing message twice.</PackageReleaseNotes>
 	</PropertyGroup>
 
 	<ItemGroup>

@@ -15,7 +15,7 @@
 		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<Copyright>Copyright (c) DeadMoon0 2026</Copyright>
-		<PackageReleaseNotes>The first preview: RFC 6455 server and client roles, the HTTP/1.1 upgrade, fragmentation, control frames, incremental UTF-8 validation and the close handshake. Autobahn testsuite: 301 cases, 298 OK, 3 informational, none failed.</PackageReleaseNotes>
+		<PackageReleaseNotes>Built on ProtoStream 0.2.0 (allocation-free reads, no second close frame); no API changes.</PackageReleaseNotes>
 	</PropertyGroup>
 
 	<ItemGroup>

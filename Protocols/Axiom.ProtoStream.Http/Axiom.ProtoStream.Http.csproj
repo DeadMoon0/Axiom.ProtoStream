@@ -15,7 +15,7 @@
 		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<Copyright>Copyright (c) DeadMoon0 2026</Copyright>
-		<PackageReleaseNotes>The first preview: the HTTP/1.1 server role following RFC 9110, RFC 9112 and RFC 3986, with Content-Length and chunked bodies, keep-alive, pipelining, 100-continue, upgrades and CONNECT; frozen, shareable responses and opt-in coalescing of pipelined responses; refuses every input published request smuggling attacks rely on.</PackageReleaseNotes>
+		<PackageReleaseNotes>HttpResponseHead (a head validated and encoded once, shared by many responses), AuthorityBytes and HttpHeader.NameEquals, and large responses streamed in slices.</PackageReleaseNotes>
 	</PropertyGroup>
 
 	<ItemGroup>

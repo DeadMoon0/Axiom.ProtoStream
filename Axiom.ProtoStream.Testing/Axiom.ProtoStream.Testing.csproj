@@ -15,7 +15,7 @@
 		<RepositoryUrl>https://github.com/DeadMoon0/Axiom.ProtoStream.git</RepositoryUrl>
 		<RepositoryType>git</RepositoryType>
 		<Copyright>Copyright (c) DeadMoon0 2026</Copyright>
-		<PackageReleaseNotes>The first preview: codec round-trips at every segment boundary, seeded mutation fuzzing with a hang watchdog, definition lint assertions, message reuse checks and in-memory transports.</PackageReleaseNotes>
+		<PackageReleaseNotes>Aligned with Axiom.ProtoStream 0.2.0; no API changes.</PackageReleaseNotes>
 	</PropertyGroup>
 
 	<ItemGroup>
